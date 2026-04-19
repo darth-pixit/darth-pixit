@@ -225,7 +225,7 @@ export class OBDManager {
 
     this.rxBuffer = '';
     const bytes = Buffer.from(cmd + '\r').toString('base64');
-    await this.device.writeCharacteristicWithResponseForService(svc.uuid, this.writeCharId, bytes);
+    await this.device.writeCharacteristicWithResponseForService(svc.uuid, this.writeCharId!, bytes);
 
     return new Promise((resolve, reject) => {
       const t = setTimeout(() => {

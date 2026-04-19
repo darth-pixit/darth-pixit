@@ -8,11 +8,12 @@ export function OBDStatusBanner() {
   if (state === 'idle') return null;
 
   const configs = {
-    scanning: { color: '#F5A623', label: 'Scanning for adapter…', showSpinner: true },
-    connecting: { color: '#F5A623', label: 'Connecting…', showSpinner: true },
-    ready: { color: '#7ED321', label: adapterName ?? 'OBD', showSpinner: false },
-    reconnecting: { color: '#F5A623', label: 'Reconnecting…', showSpinner: true },
-    error: { color: '#D0021B', label: errorMsg ?? 'OBD error', showSpinner: false },
+    idle:         { color: '#888',    label: '',                      showSpinner: false },
+    scanning:     { color: '#F5A623', label: 'Scanning for adapter…', showSpinner: true  },
+    connecting:   { color: '#F5A623', label: 'Connecting…',           showSpinner: true  },
+    ready:        { color: '#7ED321', label: adapterName ?? 'OBD',    showSpinner: false },
+    reconnecting: { color: '#F5A623', label: 'Reconnecting…',         showSpinner: true  },
+    error:        { color: '#D0021B', label: errorMsg ?? 'OBD error', showSpinner: false },
   };
 
   const cfg = configs[state] ?? configs.error;

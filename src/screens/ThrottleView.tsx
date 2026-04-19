@@ -164,7 +164,7 @@ export function ThrottleView() {
         {/* Horizontal gauge */}
         <View style={styles.gaugeOuter}>
           {/* Dimmed zone backgrounds */}
-          <View style={StyleSheet.absoluteFill} pointerEvents="none">
+          <View style={[StyleSheet.absoluteFill, { pointerEvents: 'none' }]}>
             <View style={{ flexDirection: 'row', flex: 1 }}>
               <View
                 style={{
@@ -188,8 +188,7 @@ export function ThrottleView() {
 
           {/* Animated color fill */}
           <Animated.View
-            pointerEvents="none"
-            style={[styles.fill, { width: fillWidth, backgroundColor: fillColor }]}
+            style={[styles.fill, { width: fillWidth, backgroundColor: fillColor, pointerEvents: 'none' }]}
           />
 
           {/* Zone boundary dividers */}
@@ -234,7 +233,7 @@ export function ThrottleView() {
             </View>
           ) : null}
           {!hasLiveData ? (
-            <Text style={styles.noDataHint}>Live RPM, speed &amp; fuel rate appear here</Text>
+            <Text style={styles.noDataHint}>Live RPM, speed & fuel rate appear here</Text>
           ) : null}
         </View>
 
