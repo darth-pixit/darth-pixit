@@ -64,7 +64,11 @@ export class OBDManager {
     return OBDManager.instance;
   }
 
-  private ble = new BleManager();
+  private ble: BleManager | null = null;
+  private getBle(): BleManager {
+    if (!this.ble) this.ble = new BleManager();
+    return this.ble;
+  }
   private device: Device | null = null;
   private writeCharId: string | null = null;
   private rxBuffer = '';
@@ -99,7 +103,7 @@ export class OBDManager {
     if (this.cachedDeviceId) {
       try {
         this.emit({ state: 'connecting' });
-        this.device = await this.ble.connectToDevice(this.cachedDeviceId, { timeout: 8000 });
+        this.device = await this.getBle().connectToDevice(this.cachedDeviceId, { timeout: 8000 });
         await this.onConnected();
         return;
       } catch {
@@ -128,11 +132,11 @@ export class OBDManager {
     return new Promise((resolve) => {
       let found: Device | null = null;
       const timer = setTimeout(() => {
-        this.ble.stopDeviceScan();
+        this.getBle().stopDeviceScan();
         resolve(null);
       }, 15000);
 
-      this.ble.startDeviceScan(null, { allowDuplicates: false }, (err, device) => {
+      this.getBle().startDeviceScan(null, { allowDuplicates: false }, (err, device) => {
         if (err || !device) return;
         const name = device.name?.toUpperCase() ?? '';
         const isOBD =
@@ -144,7 +148,7 @@ export class OBDManager {
         if (isOBD && !found) {
           found = device;
           clearTimeout(timer);
-          this.ble.stopDeviceScan();
+          this.getBle().stopDeviceScan();
           resolve(device);
         }
       });
