@@ -3,14 +3,11 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "expo start",
-    "android": "expo run:android",
-    "ios": "expo run:ios"
+    "start": "react-native start",
+    "android": "react-native run-android",
+    "ios": "react-native run-ios"
   },
   "dependencies": {
-    "expo": "~52.0.0",
-    "expo-asset": "~10.0.10",
-    "expo-status-bar": "~2.0.0",
     "react": "18.3.1",
     "react-native": "0.76.5",
     "react-native-ble-plx": "^3.1.2",
@@ -19,7 +16,9 @@
   },
   "devDependencies": {
     "@babel/core": "^7.24.0",
+    "@react-native/metro-config": "^0.76.0",
     "@types/react": "~18.3.12",
+    "metro-react-native-babel-preset": "^0.77.0",
     "typescript": "^5.3.3"
   },
   "private": true

@@ -1,26 +1,4 @@
 {
-  "expo": {
-    "name": "DarthPixit",
-    "slug": "darth-pixit",
-    "version": "1.0.0",
-    "orientation": "portrait",
-    "userInterfaceStyle": "dark",
-    "ios": {
-      "supportsTablet": false,
-      "bundleIdentifier": "com.darth.pixit"
-    },
-    "android": {
-      "package": "com.darth.pixit"
-    },
-    "plugins": [
-      [
-        "react-native-ble-plx",
-        {
-          "isBackgroundEnabled": true,
-          "modes": ["peripheral", "central"],
-          "bluetoothAlwaysPermission": "Allow MileIQ to connect to your OBD adapter"
-        }
-      ]
-    ]
-  }
+  "name": "DarthPixit",
+  "displayName": "DarthPixit"
 }
