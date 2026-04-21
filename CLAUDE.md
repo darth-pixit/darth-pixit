@@ -1,5 +1,14 @@
 # Darth-Pixit — Project Guide for Claude
 
+## Code Quality Standard
+
+Write code as if the person maintaining it is a violent psychopath who knows where you live. Make it that clear.
+
+- Name things for what they actually do
+- No clever tricks that need a comment to explain
+- If a future reader would have to guess, rewrite it
+
+
 ## What This App Does
 
 Darth-Pixit is a bare React Native mobile app that reads real-time OBD2 vehicle sensor data over Bluetooth Low Energy (BLE) and helps the driver save fuel. It shows:
