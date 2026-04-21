@@ -156,11 +156,6 @@ export function ThrottleView() {
           {hasLiveData ? zone.label.toUpperCase() : '— —'}
         </Text>
 
-        {/* Big throttle percentage */}
-        <Text style={[styles.pct, { color: hasLiveData ? zone.color : '#2a2a2a' }]}>
-          {hasLiveData ? `${pct}%` : '--'}
-        </Text>
-
         {/* Horizontal gauge */}
         <View style={styles.gaugeOuter}>
           {/* Dimmed zone backgrounds */}
