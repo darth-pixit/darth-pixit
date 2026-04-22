@@ -88,6 +88,11 @@ export class SensorFusion {
     return this.lastLinearMag;
   }
 
+  /** Current gravity vector estimate (m/s²). LeanAngleEstimator uses this. */
+  getGravity(): Vec3 {
+    return { ...this.gravity };
+  }
+
   /**
    * Ingest a speed sample (from either OBD or GPS) in m/s.
    * Returns the current smoothed longitudinal accel, m/s^2.
