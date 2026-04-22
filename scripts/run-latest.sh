@@ -27,6 +27,9 @@ if [ ios/Podfile -nt ios/Pods/.pod-install-stamp ] || \
   touch ios/Pods/.pod-install-stamp
 fi
 
+echo "==> Stamping icon with version number…"
+"$REPO_ROOT/scripts/stamp-icon.sh"
+
 echo "==> Starting Metro + running on device…"
 echo "    (keep this terminal open; press Ctrl+C to stop)"
 npx react-native run-ios --device
