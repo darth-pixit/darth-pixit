@@ -19,11 +19,18 @@ if [ ! -d node_modules ] || [ package.json -nt node_modules/.package-install-sta
   touch node_modules/.package-install-stamp
 fi
 
-# Re-run pod install only if the Podfile or any native dep changed.
-if [ ios/Podfile -nt ios/Pods/.pod-install-stamp ] || \
+# Re-run pod install if the Podfile or any native dep changed, or if there's
+# no stamp yet. The stamp is only written after install succeeds, so a failure
+# forces a retry next run instead of silently skipping.
+if [ ! -f ios/Pods/.pod-install-stamp ] || \
+   [ ios/Podfile -nt ios/Pods/.pod-install-stamp ] || \
    [ package.json -nt ios/Pods/.pod-install-stamp ]; then
   echo "==> pod install…"
-  cd ios && pod install && cd ..
+  (cd ios && pod install)
+  if [ ! -d ios/Pods ]; then
+    echo "pod install did not produce ios/Pods — aborting." >&2
+    exit 1
+  fi
   touch ios/Pods/.pod-install-stamp
 fi
 
