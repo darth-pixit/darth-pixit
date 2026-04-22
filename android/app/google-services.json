@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "000000000000",
-    "project_id": "your-firebase-project-id",
-    "storage_bucket": "your-firebase-project-id.appspot.com"
+    "project_number": "944318753068",
+    "project_id": "mileagetracker-7cd8f",
+    "storage_bucket": "mileagetracker-7cd8f.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+        "mobilesdk_app_id": "1:944318753068:android:0f676aa539a0952178e489",
         "android_client_info": {
           "package_name": "com.darth.pixit"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "REPLACE_WITH_YOUR_FIREBASE_API_KEY"
+          "current_key": "AIzaSyC5g498OworebwpTipITqsxjhvaNmS-qXw"
         }
       ],
       "services": {
