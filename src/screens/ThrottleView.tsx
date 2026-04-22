@@ -23,39 +23,38 @@ const TRACK_H = 72;
 const THUMB_W = 6;
 const CORNER = 14;
 
-// Zone boundary thresholds (0–1)
 const ECO_LIMIT = 0.40;
 const MOD_LIMIT = 0.70;
 
 interface Zone {
   id: 'eco' | 'moderate' | 'push';
   color: string;
-  bgDim: string;
   label: string;
   nudge: string;
+  coaching: string;
 }
 
 const ZONES: Zone[] = [
   {
     id: 'eco',
     color: '#22C55E',
-    bgDim: '#052e16',
     label: 'Eco Zone',
     nudge: 'Smooth & efficient — great job!',
+    coaching: 'Perfect — keep this pace.',
   },
   {
     id: 'moderate',
     color: '#F59E0B',
-    bgDim: '#3d1f00',
     label: 'Moderate',
     nudge: 'Ease up a bit for better mileage.',
+    coaching: 'Ease off a little to save fuel.',
   },
   {
     id: 'push',
     color: '#EF4444',
-    bgDim: '#3d0000',
     label: 'Push Zone',
     nudge: 'Ease off — heavy throttle burns fuel!',
+    coaching: 'Back off — you\'re burning extra fuel.',
   },
 ];
 
@@ -77,6 +76,18 @@ export function ThrottleView() {
   const { signOut } = useAuth();
   const [isDemoMode, setIsDemoMode] = useState(false);
   const [demoThrottle, setDemoThrottle] = useState(0);
+  const [tripAvgKmL, setTripAvgKmL] = useState<number | null>(null);
+
+  // Refs so the accumulation interval always reads fresh values
+  const demoThrottleRef = useRef(demoThrottle);
+  const fuelRateRef = useRef(fuelRateLPerH);
+  const speedRef = useRef(speedKmH);
+  useEffect(() => { demoThrottleRef.current = demoThrottle; }, [demoThrottle]);
+  useEffect(() => { fuelRateRef.current = fuelRateLPerH; }, [fuelRateLPerH]);
+  useEffect(() => { speedRef.current = speedKmH; }, [speedKmH]);
+
+  const tripFuelRef = useRef(0);
+  const tripDistRef = useRef(0);
 
   // Demo mode: animated sine-wave throttle simulation
   useEffect(() => {
@@ -91,7 +102,43 @@ export function ThrottleView() {
     return () => clearInterval(id);
   }, [isDemoMode]);
 
-  // Throttle value 0–1: prefer engineLoad, fall back to rpm, then demo
+  const hasLiveData = isDemoMode || state === 'ready';
+
+  // Reset trip accumulators when session ends
+  useEffect(() => {
+    if (!hasLiveData) {
+      tripFuelRef.current = 0;
+      tripDistRef.current = 0;
+      setTripAvgKmL(null);
+    }
+  }, [hasLiveData]);
+
+  // Accumulate fuel & distance every 500ms to compute trip average
+  useEffect(() => {
+    if (!hasLiveData) return;
+    const id = setInterval(() => {
+      const dt = 0.5 / 3600; // 500ms expressed in hours
+      let fr: number;
+      let sp: number;
+      if (isDemoMode) {
+        const t = demoThrottleRef.current;
+        fr = 0.8 + t * 9;   // simulated L/h
+        sp = 20 + t * 60;   // simulated km/h
+      } else {
+        fr = fuelRateRef.current ?? 0;
+        sp = speedRef.current ?? 0;
+      }
+      if (fr > 0.1 && sp > 0.5) {
+        tripFuelRef.current += fr * dt;
+        tripDistRef.current += sp * dt;
+        if (tripFuelRef.current > 0.005) {
+          setTripAvgKmL(tripDistRef.current / tripFuelRef.current);
+        }
+      }
+    }, 500);
+    return () => clearInterval(id);
+  }, [hasLiveData, isDemoMode]);
+
   const throttle = useMemo(() => {
     if (isDemoMode) return demoThrottle;
     if (engineLoadPct != null) return Math.max(0, Math.min(1, engineLoadPct / 100));
@@ -99,13 +146,9 @@ export function ThrottleView() {
     return 0;
   }, [isDemoMode, demoThrottle, engineLoadPct, rpm]);
 
-  const hasLiveData = isDemoMode || state === 'ready';
   const zone = getZone(throttle);
-  const pct = Math.round(throttle * 100);
 
-  // Animated value drives fill width, thumb position, and color
   const anim = useRef(new Animated.Value(0)).current;
-
   useEffect(() => {
     Animated.timing(anim, {
       toValue: throttle,
@@ -115,21 +158,8 @@ export function ThrottleView() {
     }).start();
   }, [throttle]);
 
-  // Fill stretches left → right
-  const fillWidth = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, TRACK_W],
-    extrapolate: 'clamp',
-  });
-
-  // Thumb slides left → right
-  const thumbLeft = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, TRACK_W - THUMB_W],
-    extrapolate: 'clamp',
-  });
-
-  // Color transitions smoothly: green → yellow → red
+  const fillWidth = anim.interpolate({ inputRange: [0, 1], outputRange: [0, TRACK_W], extrapolate: 'clamp' });
+  const thumbLeft = anim.interpolate({ inputRange: [0, 1], outputRange: [0, TRACK_W - THUMB_W], extrapolate: 'clamp' });
   const fillColor = anim.interpolate({
     inputRange: [0, ECO_LIMIT, MOD_LIMIT, 1],
     outputRange: ['#22C55E', '#F59E0B', '#EF4444', '#EF4444'],
@@ -159,50 +189,29 @@ export function ThrottleView() {
           {hasLiveData ? zone.label.toUpperCase() : '— —'}
         </Text>
 
-        {/* Big throttle percentage */}
-        <Text style={[styles.pct, { color: hasLiveData ? zone.color : '#2a2a2a' }]}>
-          {hasLiveData ? `${pct}%` : '--'}
-        </Text>
+        {/* Coaching copy */}
+        {hasLiveData ? (
+          <Text style={[styles.coaching, { color: zone.color }]}>
+            {zone.coaching}
+          </Text>
+        ) : null}
 
         {/* Horizontal gauge */}
         <View style={styles.gaugeOuter}>
-          {/* Dimmed zone backgrounds */}
           <View style={[StyleSheet.absoluteFill, { pointerEvents: 'none' }]}>
             <View style={{ flexDirection: 'row', flex: 1 }}>
-              <View
-                style={{
-                  flex: 40,
-                  backgroundColor: '#052e16',
-                  borderTopLeftRadius: CORNER,
-                  borderBottomLeftRadius: CORNER,
-                }}
-              />
+              <View style={{ flex: 40, backgroundColor: '#052e16', borderTopLeftRadius: CORNER, borderBottomLeftRadius: CORNER }} />
               <View style={{ flex: 30, backgroundColor: '#3d1f00' }} />
-              <View
-                style={{
-                  flex: 30,
-                  backgroundColor: '#3d0000',
-                  borderTopRightRadius: CORNER,
-                  borderBottomRightRadius: CORNER,
-                }}
-              />
+              <View style={{ flex: 30, backgroundColor: '#3d0000', borderTopRightRadius: CORNER, borderBottomRightRadius: CORNER }} />
             </View>
           </View>
-
-          {/* Animated color fill */}
-          <Animated.View
-            style={[styles.fill, { width: fillWidth, backgroundColor: fillColor, pointerEvents: 'none' }]}
-          />
-
-          {/* Zone boundary dividers */}
+          <Animated.View style={[styles.fill, { width: fillWidth, backgroundColor: fillColor, pointerEvents: 'none' }]} />
           <View style={[styles.divider, { left: TRACK_W * ECO_LIMIT - 1 }]} />
           <View style={[styles.divider, { left: TRACK_W * MOD_LIMIT - 1 }]} />
-
-          {/* Sliding thumb — bright white needle */}
           <Animated.View style={[styles.thumb, { left: thumbLeft }]} />
         </View>
 
-        {/* Zone marker labels — centered over each zone segment */}
+        {/* Zone marker labels */}
         <View style={styles.markerRow}>
           <View style={{ flex: 40, alignItems: 'center' }}>
             <Text style={[styles.markerLabel, { color: '#22C55E' }]}>ECO</Text>
@@ -214,6 +223,15 @@ export function ThrottleView() {
             <Text style={[styles.markerLabel, { color: '#EF4444' }]}>PUSH</Text>
           </View>
         </View>
+
+        {/* Trip average mileage */}
+        {tripAvgKmL != null ? (
+          <View style={styles.tripRow}>
+            <Text style={styles.tripLabel}>TRIP AVG</Text>
+            <Text style={styles.tripVal}>{tripAvgKmL.toFixed(1)}</Text>
+            <Text style={styles.tripUnit}>km/L</Text>
+          </View>
+        ) : null}
 
         {/* Live stats row */}
         <View style={styles.statsRow}>
@@ -247,14 +265,10 @@ export function ThrottleView() {
               <Text style={styles.btnText}>Disconnect OBD</Text>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity
-              style={[styles.btn, styles.btnPrimary]}
-              onPress={() => start(DEFAULT_VEHICLE)}
-            >
+            <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={() => start(DEFAULT_VEHICLE)}>
               <Text style={styles.btnText}>Connect OBD Adapter</Text>
             </TouchableOpacity>
           )}
-
           <TouchableOpacity
             style={[styles.btn, isDemoMode ? styles.btnAccent : styles.btnOutline]}
             onPress={() => setIsDemoMode((d) => !d)}
@@ -295,8 +309,6 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     gap: 16,
   },
-
-  // Nudge box
   nudgeBox: {
     borderWidth: 1,
     borderRadius: 14,
@@ -313,23 +325,18 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 24,
   },
-
-  // Zone + percentage
   zoneLabel: {
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 2.5,
     textAlign: 'center',
   },
-  pct: {
-    fontSize: 80,
-    fontWeight: '800',
+  coaching: {
+    fontSize: 15,
+    fontWeight: '500',
     textAlign: 'center',
-    lineHeight: 88,
-    letterSpacing: -2,
+    opacity: 0.85,
   },
-
-  // Gauge
   gaugeOuter: {
     width: TRACK_W,
     height: TRACK_H,
@@ -365,8 +372,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
     elevation: 6,
   },
-
-  // Zone markers
   markerRow: {
     flexDirection: 'row',
     width: TRACK_W,
@@ -376,8 +381,30 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 1.5,
   },
-
-  // Stats
+  tripRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  tripLabel: {
+    color: '#444',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1.5,
+  },
+  tripVal: {
+    color: '#FFFFFF',
+    fontSize: 26,
+    fontWeight: '700',
+    letterSpacing: -0.5,
+  },
+  tripUnit: {
+    color: '#555',
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 1,
+  },
   statsRow: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -406,8 +433,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
   },
-
-  // Buttons
   actions: {
     flexDirection: 'row',
     gap: 12,
