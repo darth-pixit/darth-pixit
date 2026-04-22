@@ -9,7 +9,8 @@
     "stamp": "./scripts/stamp-icon.sh",
     "predevice": "./scripts/stamp-icon.sh",
     "device": "react-native run-ios --device",
-    "update": "./scripts/run-latest.sh"
+    "update": "./scripts/run-latest.sh",
+    "postinstall": "node ./scripts/patch-metro-start.js"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.2.0",
