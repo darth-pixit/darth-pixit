@@ -16,6 +16,11 @@ import {
 } from 'react-native';
 import { FirebaseAuthTypes } from '@react-native-firebase/auth';
 import { useAuth } from '../auth/AuthContext';
+import { alert } from '../monitoring/AlertingService';
+import {
+  SCENARIO_AUTH_VERIFY_OTP_FAILED,
+  SCENARIO_AUTH_RESEND_OTP_FAILED,
+} from '../monitoring/AlertSeverity';
 
 const CODE_LENGTH = 6;
 
@@ -81,6 +86,9 @@ export function OTPScreen({ confirmation, phone, onBack }: Props) {
       await confirmOTP(confirmation, code);
       // onAuthStateChanged in AuthContext will update user → RootNavigator switches screens
     } catch (e: any) {
+      alert(SCENARIO_AUTH_VERIFY_OTP_FAILED, e instanceof Error ? e : undefined, {
+        errorCode: e?.code,
+      });
       Alert.alert('Invalid code', e?.message ?? 'The code you entered is incorrect. Please try again.');
       setDigits(Array(CODE_LENGTH).fill(''));
       setTimeout(() => inputRefs.current[0]?.focus(), 50);
@@ -97,6 +105,9 @@ export function OTPScreen({ confirmation, phone, onBack }: Props) {
       setDigits(Array(CODE_LENGTH).fill(''));
       setTimeout(() => inputRefs.current[0]?.focus(), 50);
     } catch (e: any) {
+      alert(SCENARIO_AUTH_RESEND_OTP_FAILED, e instanceof Error ? e : undefined, {
+        errorCode: e?.code,
+      });
       Alert.alert('Error', e?.message ?? 'Failed to resend OTP.');
     } finally {
       setResending(false);

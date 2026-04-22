@@ -14,6 +14,8 @@ import {
 } from 'react-native';
 import { FirebaseAuthTypes } from '@react-native-firebase/auth';
 import { useAuth } from '../auth/AuthContext';
+import { alert } from '../monitoring/AlertingService';
+import { SCENARIO_AUTH_SEND_OTP_FAILED } from '../monitoring/AlertSeverity';
 
 interface Props {
   onConfirmation: (c: FirebaseAuthTypes.ConfirmationResult, phone: string) => void;
@@ -36,6 +38,10 @@ export function PhoneScreen({ onConfirmation }: Props) {
       const confirmation = await sendOTP(formatted);
       onConfirmation(confirmation, formatted);
     } catch (e: any) {
+      alert(SCENARIO_AUTH_SEND_OTP_FAILED, e instanceof Error ? e : undefined, {
+        errorCode: e?.code,
+        phone: formatted.replace(/\d(?=\d{4})/g, '*'), // mask all but last 4 digits
+      });
       Alert.alert('Error', e?.message ?? 'Failed to send OTP. Check the number and try again.');
     } finally {
       setLoading(false);

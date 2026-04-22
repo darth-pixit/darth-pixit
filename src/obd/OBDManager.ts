@@ -1,5 +1,15 @@
 import { BleManager, Device, Characteristic } from 'react-native-ble-plx';
 import { Buffer } from 'buffer';
+import { alert } from '../monitoring/AlertingService';
+import {
+  SCENARIO_OBD_ADAPTER_NOT_FOUND,
+  SCENARIO_OBD_CACHED_DEVICE_MISS,
+  SCENARIO_OBD_CONNECTION_EXHAUSTED,
+  SCENARIO_OBD_KEEPALIVE_FAILED,
+  SCENARIO_OBD_PID_TIMEOUT,
+  SCENARIO_OBD_RECONNECTING,
+  SCENARIO_ECU_NOT_RESPONDING,
+} from '../monitoring/AlertSeverity';
 
 // Try FFF0 pair first (most cheap clones), fall back to NUS (Vgate, OBDLink)
 const PROFILES = [
@@ -109,6 +119,7 @@ export class OBDManager {
         await this.onConnected();
         return;
       } catch {
+        alert(SCENARIO_OBD_CACHED_DEVICE_MISS, undefined, { cachedId: this.cachedDeviceId });
         this.cachedDeviceId = null;
       }
     }
@@ -116,6 +127,7 @@ export class OBDManager {
     this.emit({ state: 'scanning' });
     const found = await this.scan();
     if (!found) {
+      alert(SCENARIO_OBD_ADAPTER_NOT_FOUND);
       this.emit({ state: 'error', errorMsg: 'No OBD adapter found. Is it plugged in?' });
       return;
     }
@@ -210,6 +222,9 @@ export class OBDManager {
     // which can take 5–15s even with the ignition on. Retry once before giving up.
     const probeOk = await this.probeEcu();
     if (!probeOk) {
+      alert(SCENARIO_ECU_NOT_RESPONDING, undefined, {
+        adapterName: this.data.adapterName ?? 'unknown',
+      });
       this.emit({ state: 'error', errorMsg: 'ECU not responding. Turn ignition ON.' });
       return;
     }
@@ -270,16 +285,23 @@ export class OBDManager {
 
         this.computeFuelRate();
         this.emitCurrent();
-      } catch {
+      } catch (e) {
         // Timeout on individual PID — skip, don't crash the loop
+        alert(SCENARIO_OBD_PID_TIMEOUT, e instanceof Error ? e : undefined, {
+          tick: this.tickCount,
+        });
       }
 
       this.tickCount++;
       if (this.tickCount % 20 === 0) {
         try {
           await this.send('ATI', 1500);
-        } catch {
+        } catch (e) {
           if (this.polling) {
+            alert(SCENARIO_OBD_KEEPALIVE_FAILED, e instanceof Error ? e : undefined, {
+              tick: this.tickCount,
+              reconnectAttempt: this.reconnectAttempt,
+            });
             this.scheduleReconnect();
             return;
           }
@@ -347,10 +369,19 @@ export class OBDManager {
     this.polling = false;
     this.reconnectAttempt++;
     if (this.reconnectAttempt > 8) {
+      alert(SCENARIO_OBD_CONNECTION_EXHAUSTED, undefined, {
+        attempts: this.reconnectAttempt,
+        adapterName: this.data.adapterName ?? 'unknown',
+      });
       this.emit({ state: 'error', errorMsg: 'Lost connection. Check the adapter.' });
       return;
     }
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempt - 1), 30000);
+    alert(SCENARIO_OBD_RECONNECTING, undefined, {
+      attempt: this.reconnectAttempt,
+      delayMs: delay,
+      adapterName: this.data.adapterName ?? 'unknown',
+    });
     this.emit({ state: 'reconnecting' });
     setTimeout(() => this.connect(), delay);
   }
