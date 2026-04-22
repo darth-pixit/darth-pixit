@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+android/app/build/
+android/build/
+ios/build/
+ios/Pods/
+ios/DerivedData/
+
+# Metro
+.metro-health-check*
+
+# Expo
+.expo/
+dist/
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+*.log
