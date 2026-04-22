@@ -5,7 +5,9 @@
   "scripts": {
     "start": "react-native start",
     "android": "react-native run-android",
-    "ios": "react-native run-ios"
+    "ios": "react-native run-ios",
+    "device": "react-native run-ios --device",
+    "update": "./scripts/run-latest.sh"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.2.0",
