@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+android/build/
+android/app/build/
+ios/build/
+ios/Pods/
+ios/DerivedData/
+
+# Expo / EAS
+.expo/
+dist/
+
+# Metro bundler cache
+.metro-health-check*
+
+# CocoaPods
+*.lock
+!package-lock.json
+!yarn.lock
+
+# Generated files
+ios/Podfile.lock
+android/.gradle/
+android/local.properties
+
+# Environment
+.env
+.env.local
+.env.*
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp

@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { ThrottleView } from './src/screens/ThrottleView';
+import { AuthProvider } from './src/auth/AuthContext';
+import { RootNavigator } from './src/navigation/RootNavigator';
 
 interface State { error: Error | null }
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, State> {
@@ -19,7 +20,13 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, State
 }
 
 export default function App() {
-  return <ErrorBoundary><ThrottleView /></ErrorBoundary>;
+  return (
+    <ErrorBoundary>
+      <AuthProvider>
+        <RootNavigator />
+      </AuthProvider>
+    </ErrorBoundary>
+  );
 }
 
 const styles = StyleSheet.create({

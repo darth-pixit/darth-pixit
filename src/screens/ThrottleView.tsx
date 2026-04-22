@@ -9,10 +9,12 @@ import {
   TouchableOpacity,
   StatusBar,
   SafeAreaView,
+  Alert,
 } from 'react-native';
 import { useOBDStore } from '../obd/OBDStore';
 import { OBDStatusBanner } from '../obd/OBDStatusBanner';
 import { VehicleCfg } from '../obd/OBDManager';
+import { useAuth } from '../auth/AuthContext';
 
 const { width: SW } = Dimensions.get('window');
 const PAD = 24;
@@ -72,6 +74,7 @@ const DEFAULT_VEHICLE: VehicleCfg = {
 
 export function ThrottleView() {
   const { engineLoadPct, rpm, state, fuelRateLPerH, speedKmH, start, stop } = useOBDStore();
+  const { signOut } = useAuth();
   const [isDemoMode, setIsDemoMode] = useState(false);
   const [demoThrottle, setDemoThrottle] = useState(0);
 
@@ -262,6 +265,19 @@ export function ThrottleView() {
           </TouchableOpacity>
         </View>
 
+        {/* Sign out */}
+        <TouchableOpacity
+          style={styles.signOutBtn}
+          onPress={() => {
+            Alert.alert('Sign out', 'Are you sure you want to sign out?', [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Sign out', style: 'destructive', onPress: signOut },
+            ]);
+          }}
+        >
+          <Text style={styles.signOutText}>Sign out</Text>
+        </TouchableOpacity>
+
       </View>
     </SafeAreaView>
   );
@@ -411,4 +427,13 @@ const styles = StyleSheet.create({
   btnOutline: { borderWidth: 1, borderColor: '#2a2a2a' },
   btnText: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
   btnTextMuted: { color: '#555' },
+  signOutBtn: {
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  signOutText: {
+    color: '#333',
+    fontSize: 13,
+    fontWeight: '500',
+  },
 });
