@@ -1,57 +1,68 @@
 /**
- * SafetyScorer — converts a trip's events + distance into a 0–100
+ * SafetyScorer — converts a trip's events + context into a 0–100
  * composite score and five per-category subscores.
  *
  * =============================================================
- *  Scoring philosophy & critique
+ *  Scoring philosophy & critique (unchanged from Phase 1)
  * =============================================================
  *
- * 1. Frequency per km, not raw counts.
- *    A 100 km highway trip with 3 events is safer than a 5 km city
- *    trip with 3 events. Penalty is always divided by distance (with a
- *    min-distance floor so a 200 m cold-start trip with one hard accel
- *    doesn't score 0).
+ * 1. Frequency per km — a 100 km trip with 3 events is safer than
+ *    5 km with 3 events. Penalty normalised by distance.
  *
- * 2. Severity-weighted.
- *    A 2.5× threshold event is much more predictive of crash risk than
- *    a 1.05× threshold event. We use a non-linear multiplier so
- *    borderline events barely dent the score.
+ * 2. Severity-weighted — a 2.5× threshold event is far more predictive
+ *    of crash risk than a 1.05× event.
  *
- * 3. Asymmetric base penalties by event type.
- *    Braking > cornering > acceleration — matches actuarial data:
- *    repeated hard braking is the strongest single predictor of
- *    collision claims (tailgating proxy); hard acceleration correlates
- *    more with fuel and wear than crash rate.
+ * 3. Asymmetric base penalties — braking > cornering > acceleration.
  *
- * 4. Emergency-braking mitigation.
- *    If a hard-brake event is tagged "preceded by hard accel" → it's
- *    part of an aggressive pattern → full penalty. If isolated → likely
- *    emergency avoidance → 60% penalty. This is imperfect (an isolated
- *    hard brake could still be bad habit) but it's the best signal we
- *    have without more context.
+ * 4. Emergency-braking mitigation — isolated hard brakes get 0.6×.
  *
- * 5. Crash floors the score.
- *    A confirmed crash makes the composite score 0 for that trip AND
- *    flags crashed=true so dashboards can surface the incident.
+ * 5. Crash floors composite to 0.
  *
- * 6. Category weights in the composite.
- *    Based on published insurance-industry loss-cost correlations:
- *      Speeding 25%, Braking 25%, Cornering 20%, Distraction 15%,
- *      Acceleration 15%.
- *    Speeding is the #1 single factor in fatal crashes (NHTSA ~29%);
- *    braking is the strongest behavioral predictor; distraction is
- *    underweighted here relative to its real risk because our
- *    detection is a weak proxy (see EventDetector.ts).
+ * 6. Category weights: speeding 25%, braking 25%, cornering 20%,
+ *    distracted 15%, acceleration 15% (actuarial correlation order).
  *
- * 7. Lifetime score = distance-weighted average of trip scores.
- *    Prevents gaming via "I'll only take short careful trips". A
- *    500 km road trip at 95 dominates fifty 2 km errand trips at 82.
+ * =============================================================
+ *  New modifiers in Phase 2
+ * =============================================================
+ *
+ * A. ROUTE GRACE FACTOR (graceFactor ∈ [0.85, 1.0])
+ *    Applied to ALL event penalties on this trip if the route is
+ *    unfamiliar. Only affects severity 1–2 events — severity ≥ 3 events
+ *    are too dangerous to excuse on unfamiliarity grounds.
+ *
+ *    CRITIQUE: "Unfamiliar" only applies at trip start. A driver who
+ *    repeats the same aggressive behaviour in familiar territory gets
+ *    no grace — correct. But a driver who drives perfectly in familiar
+ *    territory and slightly too aggressively in a new town gets partial
+ *    grace — also fair.
+ *
+ * B. RECOVERY BONUS (recoveredEventIds set)
+ *    If an event is in the recovered set, its penalty × recoveryFactor
+ *    (default 0.8). Only events with severity < 3 can recover (same
+ *    cap as route grace — severe events don't get rewarded for later
+ *    good behaviour).
+ *
+ * C. WEATHER THRESHOLD SCALING
+ *    Weather scaling happens at DETECTION time (in EventDetector), not
+ *    here. The scorer sees more events in rain but doesn't apply an
+ *    additional penalty multiplier. This keeps scoring transparent:
+ *    "you had 3 hard brakes" is meaningful; "your penalty was secretly
+ *    multiplied 1.2×" is opaque and feels unfair.
+ *
+ * D. DROWSY DRIVING AND WEAR SIGNALS
+ *    These are stored in the TripRecord for context but do NOT currently
+ *    reduce the driving score — they are treated as advisory alerts to
+ *    the driver, not as scored behaviours. Rationale: drowsy driving
+ *    detection is probabilistic enough that penalising it directly would
+ *    erode driver trust in the system. Wear signals are a vehicle
+ *    maintenance concern, not a driver behaviour score.
  */
 
 import {
   SafetyEvent,
   SafetyScore,
   CategoryScore,
+  WeatherCondition,
   SafetyConfig,
   DEFAULT_SAFETY_CONFIG,
   TripRecord,
@@ -65,11 +76,23 @@ const CATEGORY_WEIGHTS = {
   distracted: 0.15,
 } as const;
 
-/** Minimum distance (km) used as divisor to prevent tiny-trip blow-ups. */
 const MIN_DIVISOR_KM = 1.0;
-
-/** Converts penalty-per-km into a 0..100 score. Tuned against example trips. */
 const PENALTY_SCALE_PER_CATEGORY = 25;
+
+export interface ScoringContext {
+  /** Set of event IDs that earned the recovery bonus. From RecoveryTracker. */
+  recoveredEventIds: Set<string>;
+  /** Route grace factor 0.85..1.0. From RouteTracker. */
+  graceFactor: number;
+  /** Weather condition at time of trip. For display/metadata only. */
+  weatherCondition: WeatherCondition | null;
+}
+
+const DEFAULT_CONTEXT: ScoringContext = {
+  recoveredEventIds: new Set(),
+  graceFactor: 1.0,
+  weatherCondition: null,
+};
 
 export class SafetyScorer {
   private cfg: SafetyConfig;
@@ -86,24 +109,25 @@ export class SafetyScorer {
     events: SafetyEvent[],
     distanceM: number,
     crashed: boolean,
+    context: Partial<ScoringContext> = {},
   ): SafetyScore {
+    const ctx: ScoringContext = { ...DEFAULT_CONTEXT, ...context };
     const distanceKm = Math.max(distanceM / 1000, MIN_DIVISOR_KM);
 
     const perType = splitByType(events);
 
-    const acceleration = this.scoreCategory(perType.acceleration, distanceKm, 'acceleration');
-    const braking = this.scoreCategory(perType.braking, distanceKm, 'braking');
-    const cornering = this.scoreCategory(perType.cornering, distanceKm, 'cornering');
-    const speeding = this.scoreCategory(perType.speeding, distanceKm, 'speeding');
-    const distracted = this.scoreCategory(perType.distracted, distanceKm, 'distracted');
+    const acceleration = this.scoreCategory(perType.acceleration, distanceKm, 'acceleration', ctx);
+    const braking      = this.scoreCategory(perType.braking,      distanceKm, 'braking',      ctx);
+    const cornering    = this.scoreCategory(perType.cornering,     distanceKm, 'cornering',    ctx);
+    const speeding     = this.scoreCategory(perType.speeding,      distanceKm, 'speeding',     ctx);
+    const distracted   = this.scoreCategory(perType.distracted,    distanceKm, 'distracted',   ctx);
 
-    const composite = crashed
-      ? 0
-      : CATEGORY_WEIGHTS.acceleration * acceleration.score +
-        CATEGORY_WEIGHTS.braking * braking.score +
-        CATEGORY_WEIGHTS.cornering * cornering.score +
-        CATEGORY_WEIGHTS.speeding * speeding.score +
-        CATEGORY_WEIGHTS.distracted * distracted.score;
+    const composite = crashed ? 0 :
+      CATEGORY_WEIGHTS.acceleration * acceleration.score +
+      CATEGORY_WEIGHTS.braking      * braking.score      +
+      CATEGORY_WEIGHTS.cornering    * cornering.score     +
+      CATEGORY_WEIGHTS.speeding     * speeding.score      +
+      CATEGORY_WEIGHTS.distracted   * distracted.score;
 
     return {
       composite: round(composite, 1),
@@ -113,21 +137,20 @@ export class SafetyScorer {
       speeding,
       distracted,
       crashed,
+      routeGraceFactor: ctx.graceFactor,
+      weatherCondition: ctx.weatherCondition,
     };
   }
 
-  /** Distance-weighted lifetime score across a list of scorable trips. */
   lifetimeScore(trips: TripRecord[]): number | null {
     const scorable = trips.filter(
       (t) => t.score !== null && t.distanceM >= this.cfg.minScorableDistanceM,
     );
     if (scorable.length === 0) return null;
-    let wsum = 0;
-    let wtot = 0;
+    let wsum = 0, wtot = 0;
     for (const t of scorable) {
-      const w = t.distanceM;
-      wsum += (t.score!.composite) * w;
-      wtot += w;
+      wsum += t.score!.composite * t.distanceM;
+      wtot += t.distanceM;
     }
     return wtot > 0 ? round(wsum / wtot, 1) : null;
   }
@@ -138,27 +161,32 @@ export class SafetyScorer {
     events: SafetyEvent[],
     distanceKm: number,
     category: keyof typeof CATEGORY_WEIGHTS,
+    ctx: ScoringContext,
   ): CategoryScore {
     let penalty = 0;
+    let recoveredCount = 0;
     for (const ev of events) {
-      penalty += this.eventPenalty(ev, category);
+      let p = this.eventPenalty(ev, category);
+      // Route grace: only for severity 1–2 events.
+      if (ev.severity <= 2 && ctx.graceFactor < 1.0) p *= ctx.graceFactor;
+      // Recovery bonus: also only for severity < 3 (already enforced by RecoveryTracker).
+      if (ctx.recoveredEventIds.has(ev.id)) {
+        p *= this.cfg.recoveryPenaltyFactor;
+        recoveredCount++;
+      }
+      penalty += p;
     }
     const penaltyPerKm = penalty / distanceKm;
     const deduction = penaltyPerKm * PENALTY_SCALE_PER_CATEGORY;
     const score = Math.max(0, Math.min(100, 100 - deduction));
-    return {
-      score: round(score, 1),
-      penalty: round(penalty, 2),
-      eventCount: events.length,
-    };
+    return { score: round(score, 1), penalty: round(penalty, 2), eventCount: events.length, recoveredCount };
   }
 
   private eventPenalty(
     ev: SafetyEvent,
     category: keyof typeof CATEGORY_WEIGHTS,
   ): number {
-    const severityMult = severityMultiplier(ev.severity);
-
+    const mult = severityMultiplier(ev.severity);
     let base: number;
     switch (category) {
       case 'acceleration': base = 0.5; break;
@@ -167,21 +195,17 @@ export class SafetyScorer {
       case 'speeding':     base = this.overspeedingPenaltyBase(ev); break;
       case 'distracted':   base = this.distractionPenaltyBase(ev); break;
     }
-
-    let penalty = base * severityMult;
-
-    // Emergency-braking mitigation.
+    let penalty = base * mult;
+    // Emergency-braking mitigation: isolated hard brake (not following a hard accel).
     if (ev.type === 'hard_braking' && ev.meta?.precededByHardAccel === false) {
       penalty *= 0.6;
     }
-
     return penalty;
   }
 
   private overspeedingPenaltyBase(ev: SafetyEvent): number {
-    // Scale with event duration — 10s of speeding is worse than 3s.
     const durS = Math.max(1, (ev.endedAt - ev.startedAt) / 1000);
-    return 0.15 * durS; // 3s @ sev1 = 0.45 penalty; 30s @ sev3 = 9 base → plenty
+    return 0.15 * durS;
   }
 
   private distractionPenaltyBase(ev: SafetyEvent): number {
@@ -191,7 +215,6 @@ export class SafetyScorer {
 }
 
 function severityMultiplier(sev: 1 | 2 | 3 | 4 | 5): number {
-  // Non-linear — borderline events barely count, extremes are punished hard.
   switch (sev) {
     case 1: return 1.0;
     case 2: return 1.5;
@@ -201,28 +224,23 @@ function severityMultiplier(sev: 1 | 2 | 3 | 4 | 5): number {
   }
 }
 
-function splitByType(events: SafetyEvent[]): {
-  acceleration: SafetyEvent[];
-  braking: SafetyEvent[];
-  cornering: SafetyEvent[];
-  speeding: SafetyEvent[];
-  distracted: SafetyEvent[];
-} {
+function splitByType(events: SafetyEvent[]) {
   const r = {
     acceleration: [] as SafetyEvent[],
-    braking: [] as SafetyEvent[],
-    cornering: [] as SafetyEvent[],
-    speeding: [] as SafetyEvent[],
-    distracted: [] as SafetyEvent[],
+    braking:      [] as SafetyEvent[],
+    cornering:    [] as SafetyEvent[],
+    speeding:     [] as SafetyEvent[],
+    distracted:   [] as SafetyEvent[],
   };
   for (const ev of events) {
     switch (ev.type) {
-      case 'hard_acceleration': r.acceleration.push(ev); break;
-      case 'hard_braking':      r.braking.push(ev); break;
-      case 'hard_cornering':    r.cornering.push(ev); break;
-      case 'overspeeding':      r.speeding.push(ev); break;
-      case 'distracted_driving':r.distracted.push(ev); break;
-      case 'crash':             /* handled via crashed flag */ break;
+      case 'hard_acceleration':   r.acceleration.push(ev); break;
+      case 'hard_braking':        r.braking.push(ev);      break;
+      case 'hard_cornering':      r.cornering.push(ev);    break;
+      case 'overspeeding':        r.speeding.push(ev);     break;
+      case 'distracted_driving':
+      case 'drowsy_driving':      r.distracted.push(ev);   break;
+      case 'crash': break;
     }
   }
   return r;

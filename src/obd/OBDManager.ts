@@ -16,9 +16,34 @@ const INIT_CMDS = ['ATZ', 'ATE0', 'ATL0', 'ATS0', 'ATH0', 'ATAT1', 'ATSP0'];
 // High priority (every ~250ms): RPM, Speed, MAF
 // Low priority (every ~2s): Engine Load, IAT, MAP, Coolant
 const HIGH_PIDS = ['010C', '010D', '0110'] as const;
-const LOW_PIDS = ['0104', '010F', '010B', '0105'] as const;
+const LOW_PIDS  = ['0104', '010F', '010B', '0105'] as const;
+
+/**
+ * Extended PID attempts — run once at trip start, not in the hot loop.
+ *
+ * SEATBELT: No OBD-II Mode 01 standard PID exists for seatbelt status.
+ * These are the most common manufacturer-specific PIDs that some
+ * vehicles expose via Mode 22 (enhanced diagnostics). The adapter must
+ * support Mode 22; a generic ELM327 clone usually does.
+ *
+ * Known working: some GM/Chevrolet 2015+ (0x22111D), some Ford 2016+
+ * (0x22D2A1). Most other makes respond with "NO DATA" and we fall back
+ * to 'unknown'. This is the honest behaviour — never report 'fastened'
+ * when we can't confirm it.
+ *
+ * TPMS: Tyre pressure is also not in the SAE J1979 standard. The only
+ * reliable TPMS PID is manufacturer-specific Mode 22. We try the most
+ * common ones. If the vehicle has TPMS and exposes it, great. If not,
+ * we leave it null and the UI can offer a manual prompt.
+ *
+ * If you want to extend TPMS/seatbelt support for a specific car model,
+ * add its Mode 22 PIDs to EXTENDED_PIDS below.
+ */
+const SEATBELT_PIDS_M22 = ['22111D', '22D2A1', '221B00'] as const;
+const TPMS_PIDS_M22      = ['220E12', '220E13', '220E14', '220E15'] as const;
 
 export type OBDState = 'idle' | 'scanning' | 'connecting' | 'ready' | 'reconnecting' | 'error';
+export type SeatbeltStatus = 'fastened' | 'unfastened' | 'unknown';
 
 export interface OBDData {
   state: OBDState;
@@ -32,6 +57,17 @@ export interface OBDData {
   coolantC: number | null;
   fuelRateLPerH: number | null;
   fuelCalcMethod: 'MAF' | 'MAP' | 'none';
+  /** Seatbelt: only populated on vehicles with a supported Mode 22 PID. */
+  seatbeltStatus: SeatbeltStatus;
+  /**
+   * TPMS pressures in kPa for FL, FR, RL, RR.
+   * null = not supported or not yet read; 0 = flat (sensor data zero).
+   * 200–250 kPa (29–36 psi) is the normal range for most passenger cars.
+   */
+  tpmsFLKpa: number | null;
+  tpmsFRKpa: number | null;
+  tpmsRLKpa: number | null;
+  tpmsRRKpa: number | null;
   errorMsg: string | null;
 }
 
@@ -47,6 +83,11 @@ export const defaultOBDData: OBDData = {
   coolantC: null,
   fuelRateLPerH: null,
   fuelCalcMethod: 'none',
+  seatbeltStatus: 'unknown',
+  tpmsFLKpa: null,
+  tpmsFRKpa: null,
+  tpmsRLKpa: null,
+  tpmsRRKpa: null,
   errorMsg: null,
 };
 
@@ -55,6 +96,8 @@ export interface VehicleCfg {
   fuelDensityGPerL: number;
   displacementL: number;
   volEfficiency: number;
+  /** Engine redline RPM. Used by OBDWearMonitor for RPM-ratio wear signal. */
+  redlineRPM: number;
 }
 
 export class OBDManager {
@@ -214,10 +257,51 @@ export class OBDManager {
       return;
     }
 
+    // One-shot extended PID queries (non-blocking, best-effort)
+    this.probeExtendedPIDs();
+
     this.reconnectAttempt = 0;
     this.polling = true;
     this.emit({ state: 'ready', errorMsg: null });
     this.pollLoop();
+  }
+
+  /**
+   * Attempt seatbelt and TPMS reads exactly once at connection time.
+   * We don't retry on failure — if the vehicle doesn't support these
+   * PIDs they just remain null / 'unknown'.
+   */
+  private async probeExtendedPIDs() {
+    // Seatbelt
+    for (const pid of SEATBELT_PIDS_M22) {
+      try {
+        const raw = await this.send(pid, 1500);
+        const bytes = parseHexResponse(raw);
+        if (bytes && bytes.length >= 1) {
+          // Bit 0 of the first byte is the seatbelt switch on most implementations.
+          // A value of 0 = fastened (circuit closed), 1 = open = unfastened.
+          // This is manufacturer-dependent; we mark 'unknown' if we can't confirm.
+          const bit = bytes[0] & 0x01;
+          this.data.seatbeltStatus = bit === 0 ? 'fastened' : 'unfastened';
+          break;
+        }
+      } catch { /* unsupported — try next */ }
+    }
+
+    // TPMS — four sensors, four PIDs
+    const tpmsPids = [...TPMS_PIDS_M22];
+    const tpmsKeys: Array<keyof OBDData> = ['tpmsFLKpa', 'tpmsFRKpa', 'tpmsRLKpa', 'tpmsRRKpa'];
+    for (let i = 0; i < Math.min(tpmsPids.length, tpmsKeys.length); i++) {
+      try {
+        const raw = await this.send(tpmsPids[i], 1500);
+        const bytes = parseHexResponse(raw);
+        if (bytes && bytes.length >= 2) {
+          // Common encoding: kPa = (A * 256 + B) / 4
+          const kpa = ((bytes[0] * 256) + bytes[1]) / 4;
+          (this.data as unknown as Record<string, number | null>)[tpmsKeys[i] as string] = kpa;
+        }
+      } catch { /* unsupported */ }
+    }
   }
 
   private async send(cmd: string, timeoutMs = 2000): Promise<string> {
@@ -282,27 +366,13 @@ export class OBDManager {
     if (!bytes) return;
     const [A, B] = bytes;
     switch (pid) {
-      case '010C':
-        this.data.rpm = ((A * 256) + B) / 4;
-        break;
-      case '010D':
-        this.data.speedKmH = A;
-        break;
-      case '0110':
-        this.data.mafGPerS = ((A * 256) + B) / 100;
-        break;
-      case '010B':
-        this.data.mapKPa = A;
-        break;
-      case '010F':
-        this.data.iatC = A - 40;
-        break;
-      case '0104':
-        this.data.engineLoadPct = (A * 100) / 255;
-        break;
-      case '0105':
-        this.data.coolantC = A - 40;
-        break;
+      case '010C': this.data.rpm = ((A * 256) + B) / 4; break;
+      case '010D': this.data.speedKmH = A; break;
+      case '0110': this.data.mafGPerS = ((A * 256) + B) / 100; break;
+      case '010B': this.data.mapKPa = A; break;
+      case '010F': this.data.iatC = A - 40; break;
+      case '0104': this.data.engineLoadPct = (A * 100) / 255; break;
+      case '0105': this.data.coolantC = A - 40; break;
     }
   }
 

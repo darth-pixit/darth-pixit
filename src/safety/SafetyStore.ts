@@ -1,8 +1,5 @@
 /**
  * SafetyStore — Zustand store exposing the live safety state to the UI.
- *
- * The UI subscribes to this store and renders whatever it needs. The
- * store does not know about React or the UI — only about state shape.
  */
 
 import { create } from 'zustand';
@@ -12,6 +9,10 @@ import {
   TripStatus,
   TripRecord,
   CrashReport,
+  WearSignal,
+  DrowsinessSignal,
+  WeatherSnapshot,
+  RouteContext,
   SafetyConfig,
   DEFAULT_SAFETY_CONFIG,
 } from './types';
@@ -27,6 +28,11 @@ export interface SafetyState {
   liveScore: SafetyScore | null;
   crashSuspected: boolean;
   lastCrashReport: CrashReport | null;
+  wearSignals: WearSignal[];
+  drowsinessEvents: DrowsinessSignal[];
+  weather: WeatherSnapshot | null;
+  routeContext: RouteContext | null;
+  drowsinessCalibrated: boolean;
 
   // History
   recentTrips: TripRecord[];
@@ -35,7 +41,7 @@ export interface SafetyState {
   // Config
   config: SafetyConfig;
 
-  // Actions (called by integration layer — not UI directly)
+  // Actions (called by integration layer, not UI directly)
   _applyTripSnapshot: (s: {
     status: TripStatus;
     tripId: string | null;
@@ -45,6 +51,11 @@ export interface SafetyState {
     liveScore: SafetyScore | null;
     currentSpeedKmH: number;
     crashSuspected: boolean;
+    wearSignals: WearSignal[];
+    drowsinessEvents: DrowsinessSignal[];
+    weather: WeatherSnapshot | null;
+    routeContext: RouteContext | null;
+    drowsinessDetectorCalibrated: boolean;
   }) => void;
   _onTripEnded: (trip: TripRecord) => void;
   _setCrashReport: (r: CrashReport | null) => void;
@@ -63,6 +74,11 @@ export const useSafetyStore = create<SafetyState>((set) => ({
   liveScore: null,
   crashSuspected: false,
   lastCrashReport: null,
+  wearSignals: [],
+  drowsinessEvents: [],
+  weather: null,
+  routeContext: null,
+  drowsinessCalibrated: false,
 
   recentTrips: [],
   lifetimeScore: null,
@@ -78,6 +94,11 @@ export const useSafetyStore = create<SafetyState>((set) => ({
     liveScore: s.liveScore,
     currentSpeedKmH: s.currentSpeedKmH,
     crashSuspected: s.crashSuspected,
+    wearSignals: s.wearSignals,
+    drowsinessEvents: s.drowsinessEvents,
+    weather: s.weather,
+    routeContext: s.routeContext,
+    drowsinessCalibrated: s.drowsinessDetectorCalibrated,
   }),
   _onTripEnded: (trip) => set((prev) => ({
     recentTrips: [trip, ...prev.recentTrips].slice(0, 50),
