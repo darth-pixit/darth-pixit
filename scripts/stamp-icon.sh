@@ -21,7 +21,7 @@ if [ ! -f "$ORIG" ]; then
 fi
 
 VERSION="$(node -p "require('$REPO_ROOT/package.json').version" 2>/dev/null || echo 'dev')"
-echo "==> Stamping icon with v$VERSION…"
+echo "==> Stamping icon with v${VERSION}..."
 
 # Draw a semi-transparent banner across the bottom third of the icon,
 # then write the version in large white bold text centred over it.
