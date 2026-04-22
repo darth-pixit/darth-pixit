@@ -120,22 +120,81 @@ export class OBDManager {
     this.emit({ ...defaultOBDData, state: 'idle', debugLog: [...this.logBuf] });
   }
 
+  private async waitForPoweredOn(timeoutMs = 8000): Promise<boolean> {
+    const state = await this.getBle().state();
+    this.log(`BLE state: ${state}`);
+    if (state === 'PoweredOn') return true;
+    if (state === 'Unauthorized') {
+      this.emit({
+        state: 'error',
+        errorMsg: 'Bluetooth permission denied. Enable it in Settings → DarthPixit → Bluetooth.',
+      });
+      return false;
+    }
+    if (state === 'Unsupported') {
+      this.emit({ state: 'error', errorMsg: 'BLE not supported on this device.' });
+      return false;
+    }
+
+    return new Promise((resolve) => {
+      const sub = this.getBle().onStateChange((s) => {
+        this.log(`BLE state change: ${s}`);
+        if (s === 'PoweredOn') {
+          sub.remove();
+          clearTimeout(timer);
+          resolve(true);
+        }
+        if (s === 'Unauthorized' || s === 'Unsupported') {
+          sub.remove();
+          clearTimeout(timer);
+          this.emit({
+            state: 'error',
+            errorMsg:
+              s === 'Unauthorized'
+                ? 'Bluetooth permission denied. Enable it in Settings.'
+                : 'BLE not supported on this device.',
+          });
+          resolve(false);
+        }
+      }, true);
+      const timer = setTimeout(() => {
+        sub.remove();
+        this.emit({
+          state: 'error',
+          errorMsg: 'Bluetooth is off. Turn it on and try again.',
+        });
+        resolve(false);
+      }, timeoutMs);
+    });
+  }
+
   private async connect() {
+    if (!(await this.waitForPoweredOn())) return;
+
     if (this.cachedDeviceId) {
       try {
         this.emit({ state: 'connecting' });
+        this.log(`reconnecting to cached ${this.cachedDeviceId}`);
         this.device = await this.getBle().connectToDevice(this.cachedDeviceId, { timeout: 8000 });
         await this.onConnected();
         return;
-      } catch {
+      } catch (e: any) {
+        this.log(`cached reconnect failed: ${e?.message ?? e}`);
         this.cachedDeviceId = null;
       }
     }
 
     this.emit({ state: 'scanning' });
+    this.log('scanning for OBD adapter (15s)');
     const found = await this.scan();
     if (!found) {
-      this.emit({ state: 'error', errorMsg: 'No OBD adapter found. Is it plugged in?' });
+      this.emit({
+        state: 'error',
+        errorMsg:
+          'No BLE OBD adapter found. iOS requires a BLE (BT 4.0+) adapter — ' +
+          'cheap "Bluetooth" ELM327 clones are usually Bluetooth Classic and ' +
+          'invisible to iOS apps.',
+      });
       return;
     }
 
@@ -165,7 +224,10 @@ export class OBDManager {
           return;
         }
         if (!device) return;
-        const name = device.name?.toUpperCase() ?? '';
+        const rawName = device.name ?? device.localName ?? '';
+        const name = rawName.toUpperCase();
+        // Log every named device we see, to help identify what's around.
+        if (rawName) this.log(`  saw "${rawName}" id=${device.id}`);
         const isOBD =
           name.includes('OBD') ||
           name.includes('ELM') ||
@@ -174,10 +236,15 @@ export class OBDManager {
           name.includes('ICAR') ||
           name.includes('VEEPEAK') ||
           name.includes('KONNWEI') ||
-          name.includes('VIECAR');
+          name.includes('VIECAR') ||
+          name.includes('CARLY') ||
+          name.includes('CARISTA') ||
+          name.includes('BLE-OBD') ||
+          name.includes('V-LINK') ||
+          name.startsWith('IOS-VLINK');
         if (isOBD && !found) {
           found = device;
-          this.log(`scan: found "${device.name}" id=${device.id}`);
+          this.log(`scan: matched "${rawName}" id=${device.id}`);
           clearTimeout(timer);
           this.getBle().stopDeviceScan();
           resolve(device);
