@@ -1,17 +1,18 @@
 import { BleManager, Device, Characteristic } from 'react-native-ble-plx';
 import { Buffer } from 'buffer';
 
-// Try FFF0 pair first (most cheap clones), fall back to NUS (Vgate, OBDLink)
-const PROFILES = [
-  { service: 'fff0', write: 'fff2', notify: 'fff1' },
-  {
-    service: '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
-    write: '6e400002-b5a3-f393-e0a9-e50e24dcca9e',
-    notify: '6e400003-b5a3-f393-e0a9-e50e24dcca9e',
-  },
+// Known service UUIDs for common adapter families, ranked by how widespread they are.
+// We still auto-detect write+notify characteristics so unknown clones also work.
+const KNOWN_SERVICES = [
+  'fff0', // most cheap FFF0/FFF1/FFF2 clones
+  'ffe0', // HM-10 pattern (single FFE1 char) — very common on sub-$10 clones
+  '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART (Vgate, OBDLink)
+  '18f0', // some ELM327 clones
 ];
 
-const INIT_CMDS = ['ATZ', 'ATE0', 'ATL0', 'ATS0', 'ATH0', 'ATAT1', 'ATSP0'];
+// ATS0 (no spaces) was removed — it makes ELM327 concatenate hex bytes, breaking our
+// parsers. Default ELM327 behavior (spaces between bytes) is what we expect.
+const INIT_CMDS = ['ATZ', 'ATE0', 'ATL0', 'ATH0', 'ATAT1', 'ATSP0'];
 
 // High priority (every ~250ms): RPM, Speed, MAF
 // Low priority (every ~2s): Engine Load, IAT, MAP, Coolant
@@ -69,6 +70,7 @@ export interface OBDData {
   tpmsRLKpa: number | null;
   tpmsRRKpa: number | null;
   errorMsg: string | null;
+  debugLog: string[];
 }
 
 export const defaultOBDData: OBDData = {
@@ -89,6 +91,7 @@ export const defaultOBDData: OBDData = {
   tpmsRLKpa: null,
   tpmsRRKpa: null,
   errorMsg: null,
+  debugLog: [],
 };
 
 export interface VehicleCfg {
@@ -113,7 +116,9 @@ export class OBDManager {
     return this.ble;
   }
   private device: Device | null = null;
+  private serviceUuid: string | null = null;
   private writeCharId: string | null = null;
+  private writeWithResponse = true;
   private rxBuffer = '';
   private responseResolve: ((s: string) => void) | null = null;
   private polling = false;
@@ -123,7 +128,18 @@ export class OBDManager {
   private cachedDeviceId: string | null = null;
   private vehicle: VehicleCfg | null = null;
   private onUpdate: ((data: OBDData) => void) | null = null;
-  private data: OBDData = { ...defaultOBDData };
+  private data: OBDData = { ...defaultOBDData, debugLog: [] };
+  private logBuf: string[] = [];
+
+  private log(msg: string) {
+    const ts = new Date().toISOString().slice(11, 23);
+    const line = `[${ts}] ${msg}`;
+    console.log('[OBD]', line);
+    this.logBuf.push(line);
+    if (this.logBuf.length > 80) this.logBuf.splice(0, this.logBuf.length - 80);
+    this.data = { ...this.data, debugLog: [...this.logBuf] };
+    this.onUpdate?.(this.data);
+  }
 
   setUpdateHandler(fn: (data: OBDData) => void) {
     this.onUpdate = fn;
@@ -132,32 +148,98 @@ export class OBDManager {
   async start(vehicle: VehicleCfg) {
     this.vehicle = vehicle;
     this.reconnectAttempt = 0;
+    this.logBuf = [];
+    this.log('start()');
     await this.connect();
   }
 
   async stop() {
+    this.log('stop()');
     this.polling = false;
+    this.responseResolve = null;
+    this.rxBuffer = '';
     await this.device?.cancelConnection();
     this.device = null;
-    this.emit({ ...defaultOBDData, state: 'idle' });
+    this.serviceUuid = null;
+    this.writeCharId = null;
+    this.emit({ ...defaultOBDData, state: 'idle', debugLog: [...this.logBuf] });
+  }
+
+  private async waitForPoweredOn(timeoutMs = 8000): Promise<boolean> {
+    const state = await this.getBle().state();
+    this.log(`BLE state: ${state}`);
+    if (state === 'PoweredOn') return true;
+    if (state === 'Unauthorized') {
+      this.emit({
+        state: 'error',
+        errorMsg: 'Bluetooth permission denied. Enable it in Settings → DarthPixit → Bluetooth.',
+      });
+      return false;
+    }
+    if (state === 'Unsupported') {
+      this.emit({ state: 'error', errorMsg: 'BLE not supported on this device.' });
+      return false;
+    }
+
+    return new Promise((resolve) => {
+      const sub = this.getBle().onStateChange((s) => {
+        this.log(`BLE state change: ${s}`);
+        if (s === 'PoweredOn') {
+          sub.remove();
+          clearTimeout(timer);
+          resolve(true);
+        }
+        if (s === 'Unauthorized' || s === 'Unsupported') {
+          sub.remove();
+          clearTimeout(timer);
+          this.emit({
+            state: 'error',
+            errorMsg:
+              s === 'Unauthorized'
+                ? 'Bluetooth permission denied. Enable it in Settings.'
+                : 'BLE not supported on this device.',
+          });
+          resolve(false);
+        }
+      }, true);
+      const timer = setTimeout(() => {
+        sub.remove();
+        this.emit({
+          state: 'error',
+          errorMsg: 'Bluetooth is off. Turn it on and try again.',
+        });
+        resolve(false);
+      }, timeoutMs);
+    });
   }
 
   private async connect() {
+    if (!(await this.waitForPoweredOn())) return;
+
     if (this.cachedDeviceId) {
       try {
         this.emit({ state: 'connecting' });
+        this.log(`reconnecting to cached ${this.cachedDeviceId}`);
         this.device = await this.getBle().connectToDevice(this.cachedDeviceId, { timeout: 8000 });
         await this.onConnected();
         return;
-      } catch {
+      } catch (e: any) {
+        this.log(`cached reconnect failed: ${e?.message ?? e}`);
         this.cachedDeviceId = null;
       }
     }
 
     this.emit({ state: 'scanning' });
+    this.log('scanning for OBD adapter (15s)');
     const found = await this.scan();
     if (!found) {
-      this.emit({ state: 'error', errorMsg: 'No OBD adapter found. Is it plugged in?' });
+      this.emit({
+        state: 'error',
+        errorMsg:
+          'No BLE OBD adapter found. iOS requires a BLE (BT 4.0+) adapter — ' +
+          'cheap "Bluetooth" ELM327 clones are usually Bluetooth Classic and ' +
+          'invisible to iOS apps.',
+      });
       return;
     }
 
@@ -166,7 +248,8 @@ export class OBDManager {
       this.device = await found.connect({ timeout: 8000 });
       this.cachedDeviceId = this.device.id;
       await this.onConnected();
-    } catch {
+    } catch (e: any) {
+      this.log(`connect/onConnected failed: ${e?.message ?? e}`);
       this.scheduleReconnect();
     }
   }
@@ -176,20 +259,37 @@ export class OBDManager {
       let found: Device | null = null;
       const timer = setTimeout(() => {
         this.getBle().stopDeviceScan();
+        this.log('scan: no OBD adapter found after 15s');
         resolve(null);
       }, 15000);
 
       this.getBle().startDeviceScan(null, { allowDuplicates: false }, (err, device) => {
-        if (err || !device) return;
-        const name = device.name?.toUpperCase() ?? '';
+        if (err) {
+          this.log(`scan error: ${err.message ?? err}`);
+          return;
+        }
+        if (!device) return;
+        const rawName = device.name ?? device.localName ?? '';
+        const name = rawName.toUpperCase();
+        // Log every named device we see, to help identify what's around.
+        if (rawName) this.log(`  saw "${rawName}" id=${device.id}`);
         const isOBD =
           name.includes('OBD') ||
           name.includes('ELM') ||
           name.includes('VGATE') ||
           name.includes('OBDII') ||
-          name.includes('ICAR');
+          name.includes('ICAR') ||
+          name.includes('VEEPEAK') ||
+          name.includes('KONNWEI') ||
+          name.includes('VIECAR') ||
+          name.includes('CARLY') ||
+          name.includes('CARISTA') ||
+          name.includes('BLE-OBD') ||
+          name.includes('V-LINK') ||
+          name.startsWith('IOS-VLINK');
         if (isOBD && !found) {
           found = device;
+          this.log(`scan: matched "${rawName}" id=${device.id}`);
           clearTimeout(timer);
           this.getBle().stopDeviceScan();
           resolve(device);
@@ -200,30 +300,47 @@ export class OBDManager {
 
   private async onConnected() {
     if (!this.device) return;
+    this.log('connected; discovering services');
     await this.device.discoverAllServicesAndCharacteristics();
 
     const services = await this.device.services();
-    let profile = PROFILES[0];
-    for (const svc of services) {
-      const match = PROFILES.find((p) =>
-        svc.uuid.toLowerCase().startsWith(p.service.toLowerCase())
-      );
-      if (match) {
-        profile = match;
-        break;
-      }
+    this.log(`services: ${services.map((s) => s.uuid).join(', ') || '<none>'}`);
+
+    const picked = await this.pickCharacteristics();
+    if (!picked) {
+      this.emit({
+        state: 'error',
+        errorMsg:
+          'Incompatible adapter. Found no BLE service with write+notify. ' +
+          'Many cheap "Bluetooth" ELM327 clones are Bluetooth Classic (SPP) ' +
+          'and cannot work on iOS. Check the log for details.',
+      });
+      return;
     }
-    this.writeCharId = profile.write;
+
+    this.serviceUuid = picked.serviceUuid;
+    this.writeCharId = picked.writeUuid;
+    this.writeWithResponse = picked.writeWithResponse;
+    this.log(
+      `using service=${picked.serviceUuid} write=${picked.writeUuid}` +
+        `(${picked.writeWithResponse ? 'withResp' : 'noResp'}) notify=${picked.notifyUuid}`
+    );
 
     this.device.monitorCharacteristicForService(
-      profile.service,
-      profile.notify,
-      (_err: Error | null, char: Characteristic | null) => {
-        if (_err || !char?.value) return;
+      picked.serviceUuid,
+      picked.notifyUuid,
+      (err: Error | null, char: Characteristic | null) => {
+        if (err) {
+          this.log(`notify error: ${err.message ?? err}`);
+          return;
+        }
+        if (!char?.value) return;
         const chunk = Buffer.from(char.value, 'base64').toString('ascii');
         this.rxBuffer += chunk;
-        if (this.rxBuffer.includes('>') || this.rxBuffer.endsWith('\r')) {
-          const response = this.rxBuffer.trim();
+        // ELM327 terminates every response with the '>' prompt. Resolving on
+        // '\r' alone truncates multi-line responses (e.g. "SEARCHING...\r41 00 ...\r>").
+        if (this.rxBuffer.includes('>')) {
+          const response = this.rxBuffer.replace(/>/g, '').trim();
           this.rxBuffer = '';
           this.responseResolve?.(response);
           this.responseResolve = null;
@@ -231,28 +348,25 @@ export class OBDManager {
       }
     );
 
-    this.device.onDisconnected(() => {
+    this.device.onDisconnected((err) => {
+      this.log(`disconnected: ${err?.message ?? 'ok'}`);
       if (this.polling) this.scheduleReconnect();
     });
 
     for (const cmd of INIT_CMDS) {
       try {
-        await this.send(cmd, 2000);
+        // ATZ is a chip reset; give it extra time and let the chip settle.
+        await this.send(cmd, cmd === 'ATZ' ? 4000 : 2000);
+        if (cmd === 'ATZ') await sleep(600);
       } catch {
         // non-fatal
       }
     }
 
-    try {
-      const resp = await this.send('0100', 3000);
-      if (resp.includes('UNABLE') || resp.includes('NO DATA')) {
-        this.emit({
-          state: 'error',
-          errorMsg: 'Adapter connected but car ECU not responding. Turn ignition ON.',
-        });
-        return;
-      }
-    } catch {
+    // Probe ECU. The first PID request triggers ELM327 auto-protocol search,
+    // which can take 5–15s even with the ignition on. Retry once before giving up.
+    const probeOk = await this.probeEcu();
+    if (!probeOk) {
       this.emit({ state: 'error', errorMsg: 'ECU not responding. Turn ignition ON.' });
       return;
     }
@@ -304,27 +418,141 @@ export class OBDManager {
     }
   }
 
+  private async pickCharacteristics(): Promise<{
+    serviceUuid: string;
+    writeUuid: string;
+    notifyUuid: string;
+    writeWithResponse: boolean;
+  } | null> {
+    if (!this.device) return null;
+    const services = await this.device.services();
+
+    // Rank services: known-good UUIDs first, then anything else.
+    const ranked = [...services].sort((a, b) => {
+      const ai = KNOWN_SERVICES.findIndex((u) => a.uuid.toLowerCase().startsWith(u.toLowerCase()));
+      const bi = KNOWN_SERVICES.findIndex((u) => b.uuid.toLowerCase().startsWith(u.toLowerCase()));
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    });
+
+    for (const svc of ranked) {
+      const chars = await svc.characteristics();
+      const props = chars
+        .map(
+          (c) =>
+            c.uuid.slice(0, 8) +
+            (c.isWritableWithResponse ? 'W' : '') +
+            (c.isWritableWithoutResponse ? 'w' : '') +
+            (c.isNotifiable ? 'N' : '') +
+            (c.isIndicatable ? 'I' : '')
+        )
+        .join(' ');
+      this.log(`  svc ${svc.uuid} chars: ${props || '<none>'}`);
+
+      const notify = chars.find((c) => c.isNotifiable || c.isIndicatable);
+      if (!notify) continue;
+
+      // Prefer a distinct write char if one exists, but on HM-10 the same char
+      // handles both. Prefer write-with-response but accept w/o-response.
+      const writeSameChar =
+        notify.isWritableWithResponse || notify.isWritableWithoutResponse ? notify : null;
+      const writeDifferent =
+        chars.find(
+          (c) => c.uuid !== notify.uuid && (c.isWritableWithResponse || c.isWritableWithoutResponse)
+        ) || null;
+      const write = writeDifferent ?? writeSameChar;
+      if (!write) continue;
+
+      return {
+        serviceUuid: svc.uuid,
+        writeUuid: write.uuid,
+        notifyUuid: notify.uuid,
+        writeWithResponse: !!write.isWritableWithResponse,
+      };
+    }
+    return null;
+  }
+
+  private async probeEcu(): Promise<boolean> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      this.log(`probe 0100 attempt ${attempt + 1}`);
+      try {
+        const resp = await this.send('0100', 15000);
+        if (isEcuUnreachable(resp)) {
+          this.log(`probe: ECU unreachable ("${resp.slice(0, 60)}")`);
+          continue;
+        }
+        // Accept both spaced ("41 00 ...") and compact ("4100...") responses.
+        // ELM327 mode-01 positive response always starts with 41.
+        if (/41\s*00/i.test(resp)) {
+          this.log('probe: success');
+          return true;
+        }
+        this.log(`probe: unrecognized response "${resp.slice(0, 80)}"`);
+      } catch (e: any) {
+        this.log(`probe: error ${e?.message ?? e}`);
+      }
+    }
+    return false;
+  }
+
   private async send(cmd: string, timeoutMs = 2000): Promise<string> {
-    if (!this.device || !this.writeCharId) throw new Error('Not connected');
-    const svc = (await this.device.services()).find((s) =>
-      PROFILES.some((p) => s.uuid.toLowerCase().startsWith(p.service.toLowerCase()))
-    );
-    if (!svc) throw new Error('Service not found');
+    if (!this.device || !this.writeCharId || !this.serviceUuid) throw new Error('Not connected');
 
     this.rxBuffer = '';
     const bytes = Buffer.from(cmd + '\r').toString('base64');
-    await this.device.writeCharacteristicWithResponseForService(svc.uuid, this.writeCharId!, bytes);
+    this.log(`> ${cmd}`);
 
-    return new Promise((resolve, reject) => {
-      const t = setTimeout(() => {
-        this.responseResolve = null;
-        reject(new Error('timeout'));
-      }, timeoutMs);
-      this.responseResolve = (resp) => {
-        clearTimeout(t);
-        resolve(resp);
-      };
+    // Register the resolver BEFORE writing so a fast response is never dropped.
+    let outerResolve!: (s: string) => void;
+    let outerReject!: (e: Error) => void;
+    const responsePromise = new Promise<string>((res, rej) => {
+      outerResolve = res;
+      outerReject = rej;
     });
+    const t = setTimeout(() => {
+      this.responseResolve = null;
+      this.log(`timeout (${timeoutMs}ms) waiting for: ${cmd}`);
+      outerReject(new Error('timeout'));
+    }, timeoutMs);
+    this.responseResolve = (resp) => {
+      clearTimeout(t);
+      this.log(`< ${resp.replace(/\s+/g, ' ').slice(0, 140)}`);
+      outerResolve(resp);
+    };
+
+    try {
+      await this.doWrite(bytes);
+    } catch (e: any) {
+      // Some adapters advertise both write modes but only one actually works.
+      // Flip and retry once before surfacing the error.
+      this.log(`write failed (${this.writeWithResponse ? 'withResp' : 'noResp'}): ${e?.message ?? e}; retrying other mode`);
+      this.writeWithResponse = !this.writeWithResponse;
+      try {
+        await this.doWrite(bytes);
+      } catch (e2: any) {
+        clearTimeout(t);
+        this.responseResolve = null;
+        throw e2;
+      }
+    }
+
+    return responsePromise;
+  }
+
+  private async doWrite(bytes: string) {
+    if (this.writeWithResponse) {
+      await this.device!.writeCharacteristicWithResponseForService(
+        this.serviceUuid!,
+        this.writeCharId!,
+        bytes
+      );
+    } else {
+      await this.device!.writeCharacteristicWithoutResponseForService(
+        this.serviceUuid!,
+        this.writeCharId!,
+        bytes
+      );
+    }
   }
 
   private async pollLoop() {
@@ -413,7 +641,7 @@ export class OBDManager {
   }
 
   private emit(patch: Partial<OBDData>) {
-    this.data = { ...this.data, ...patch };
+    this.data = { ...this.data, ...patch, debugLog: [...this.logBuf] };
     this.onUpdate?.(this.data);
   }
 
@@ -422,9 +650,34 @@ export class OBDManager {
   }
 }
 
+function isEcuUnreachable(resp: string): boolean {
+  const s = resp.toUpperCase();
+  return (
+    s.includes('UNABLE') ||
+    s.includes('NO DATA') ||
+    s.includes('BUS INIT') ||
+    s.includes('CAN ERROR') ||
+    s.includes('STOPPED') ||
+    s.includes('BUFFER FULL') ||
+    s.trim() === '?'
+  );
+}
+
 function parseHexResponse(raw: string): number[] | null {
-  const clean = raw.replace(/[^0-9A-Fa-f\s]/g, '').trim();
-  const parts = clean.split(/\s+/);
+  // Strip transient ELM327 status lines so they don't get parsed as hex.
+  const cleaned = raw
+    .split(/[\r\n]+/)
+    .map((l) => l.trim())
+    .filter((l) => l && !/^SEARCHING/i.test(l) && !/^BUS /i.test(l))
+    .join(' ');
+  const hexOnly = cleaned.replace(/[^0-9A-Fa-f\s]/g, '').trim();
+
+  // Support both spaced format ("41 00 BE 3E") and compact format ("4100BE3E").
+  let parts = hexOnly.split(/\s+/).filter(Boolean);
+  if (parts.length < 3 && parts.length === 1) {
+    const m = parts[0].match(/.{2}/g);
+    if (m) parts = m;
+  }
   if (parts.length < 3) return null;
   try {
     return parts.slice(2).map((h) => parseInt(h, 16));

@@ -3,19 +3,28 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "react-native start",
+    "start": "node ./scripts/start-metro.js",
     "android": "react-native run-android",
-    "ios": "react-native run-ios"
+    "ios": "react-native run-ios",
+    "stamp": "./scripts/stamp-icon.sh",
+    "predevice": "./scripts/stamp-icon.sh",
+    "device": "react-native run-ios --device",
+    "update": "./scripts/run-latest.sh"
   },
   "dependencies": {
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "@react-native-firebase/app": "^24.0.0",
+    "@react-native-firebase/auth": "^24.0.0",
+    "buffer": "^6.0.3",
     "react": "18.3.1",
     "react-native": "0.76.5",
     "react-native-ble-plx": "^3.1.2",
-    "zustand": "^5.0.2",
-    "buffer": "^6.0.3"
+    "zustand": "^5.0.2"
   },
   "devDependencies": {
     "@babel/core": "^7.24.0",
+    "@react-native-community/cli": "14.1.0",
+    "@react-native-community/cli-server-api": "14.1.0",
     "@react-native/metro-config": "^0.76.0",
     "@types/react": "~18.3.12",
     "metro-react-native-babel-preset": "^0.77.0",
