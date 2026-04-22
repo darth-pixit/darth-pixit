@@ -10,7 +10,9 @@ const KNOWN_SERVICES = [
   '18f0', // some ELM327 clones
 ];
 
-const INIT_CMDS = ['ATZ', 'ATE0', 'ATL0', 'ATS0', 'ATH0', 'ATAT1', 'ATSP0'];
+// ATS0 (no spaces) was removed — it makes ELM327 concatenate hex bytes, breaking our
+// parsers. Default ELM327 behavior (spaces between bytes) is what we expect.
+const INIT_CMDS = ['ATZ', 'ATE0', 'ATL0', 'ATH0', 'ATAT1', 'ATSP0'];
 
 // High priority (every ~250ms): RPM, Speed, MAF
 // Low priority (every ~2s): Engine Load, IAT, MAP, Coolant
@@ -395,7 +397,9 @@ export class OBDManager {
           this.log(`probe: ECU unreachable ("${resp.slice(0, 60)}")`);
           continue;
         }
-        if (/[0-9A-F]{2}\s+[0-9A-F]{2}/i.test(resp)) {
+        // Accept both spaced ("41 00 ...") and compact ("4100...") responses.
+        // ELM327 mode-01 positive response always starts with 41.
+        if (/41\s*00/i.test(resp)) {
           this.log('probe: success');
           return true;
         }
@@ -413,52 +417,58 @@ export class OBDManager {
     this.rxBuffer = '';
     const bytes = Buffer.from(cmd + '\r').toString('base64');
     this.log(`> ${cmd}`);
+
+    // Register the resolver BEFORE writing so a fast response is never dropped.
+    let outerResolve!: (s: string) => void;
+    let outerReject!: (e: Error) => void;
+    const responsePromise = new Promise<string>((res, rej) => {
+      outerResolve = res;
+      outerReject = rej;
+    });
+    const t = setTimeout(() => {
+      this.responseResolve = null;
+      this.log(`timeout (${timeoutMs}ms) waiting for: ${cmd}`);
+      outerReject(new Error('timeout'));
+    }, timeoutMs);
+    this.responseResolve = (resp) => {
+      clearTimeout(t);
+      this.log(`< ${resp.replace(/\s+/g, ' ').slice(0, 140)}`);
+      outerResolve(resp);
+    };
+
     try {
-      if (this.writeWithResponse) {
-        await this.device.writeCharacteristicWithResponseForService(
-          this.serviceUuid,
-          this.writeCharId,
-          bytes
-        );
-      } else {
-        await this.device.writeCharacteristicWithoutResponseForService(
-          this.serviceUuid,
-          this.writeCharId,
-          bytes
-        );
-      }
+      await this.doWrite(bytes);
     } catch (e: any) {
       // Some adapters advertise both write modes but only one actually works.
       // Flip and retry once before surfacing the error.
       this.log(`write failed (${this.writeWithResponse ? 'withResp' : 'noResp'}): ${e?.message ?? e}; retrying other mode`);
       this.writeWithResponse = !this.writeWithResponse;
-      if (this.writeWithResponse) {
-        await this.device.writeCharacteristicWithResponseForService(
-          this.serviceUuid,
-          this.writeCharId,
-          bytes
-        );
-      } else {
-        await this.device.writeCharacteristicWithoutResponseForService(
-          this.serviceUuid,
-          this.writeCharId,
-          bytes
-        );
+      try {
+        await this.doWrite(bytes);
+      } catch (e2: any) {
+        clearTimeout(t);
+        this.responseResolve = null;
+        throw e2;
       }
     }
 
-    return new Promise((resolve, reject) => {
-      const t = setTimeout(() => {
-        this.responseResolve = null;
-        this.log(`timeout (${timeoutMs}ms) waiting for: ${cmd}`);
-        reject(new Error('timeout'));
-      }, timeoutMs);
-      this.responseResolve = (resp) => {
-        clearTimeout(t);
-        this.log(`< ${resp.replace(/\s+/g, ' ').slice(0, 140)}`);
-        resolve(resp);
-      };
-    });
+    return responsePromise;
+  }
+
+  private async doWrite(bytes: string) {
+    if (this.writeWithResponse) {
+      await this.device!.writeCharacteristicWithResponseForService(
+        this.serviceUuid!,
+        this.writeCharId!,
+        bytes
+      );
+    } else {
+      await this.device!.writeCharacteristicWithoutResponseForService(
+        this.serviceUuid!,
+        this.writeCharId!,
+        bytes
+      );
+    }
   }
 
   private async pollLoop() {
@@ -591,7 +601,13 @@ function parseHexResponse(raw: string): number[] | null {
     .filter((l) => l && !/^SEARCHING/i.test(l) && !/^BUS /i.test(l))
     .join(' ');
   const hexOnly = cleaned.replace(/[^0-9A-Fa-f\s]/g, '').trim();
-  const parts = hexOnly.split(/\s+/).filter(Boolean);
+
+  // Support both spaced format ("41 00 BE 3E") and compact format ("4100BE3E").
+  let parts = hexOnly.split(/\s+/).filter(Boolean);
+  if (parts.length < 3 && parts.length === 1) {
+    const m = parts[0].match(/.{2}/g);
+    if (m) parts = m;
+  }
   if (parts.length < 3) return null;
   try {
     return parts.slice(2).map((h) => parseInt(h, 16));
