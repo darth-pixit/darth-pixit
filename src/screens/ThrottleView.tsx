@@ -69,6 +69,7 @@ const DEFAULT_VEHICLE: VehicleCfg = {
   fuelDensityGPerL: 740,
   displacementL: 1.0,
   volEfficiency: 0.82,
+  redlineRPM: 6500,
 };
 
 export function ThrottleView() {
