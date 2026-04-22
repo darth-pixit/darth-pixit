@@ -94,6 +94,8 @@ export class OBDManager {
 
   async stop() {
     this.polling = false;
+    this.responseResolve = null;
+    this.rxBuffer = '';
     await this.device?.cancelConnection();
     this.device = null;
     this.emit({ ...defaultOBDData, state: 'idle' });
@@ -179,8 +181,10 @@ export class OBDManager {
         if (_err || !char?.value) return;
         const chunk = Buffer.from(char.value, 'base64').toString('ascii');
         this.rxBuffer += chunk;
-        if (this.rxBuffer.includes('>') || this.rxBuffer.endsWith('\r')) {
-          const response = this.rxBuffer.trim();
+        // ELM327 terminates every response with the '>' prompt. Resolving on
+        // '\r' alone truncates multi-line responses (e.g. "SEARCHING...\r41 00 ...\r>").
+        if (this.rxBuffer.includes('>')) {
+          const response = this.rxBuffer.replace(/>/g, '').trim();
           this.rxBuffer = '';
           this.responseResolve?.(response);
           this.responseResolve = null;
@@ -194,22 +198,18 @@ export class OBDManager {
 
     for (const cmd of INIT_CMDS) {
       try {
-        await this.send(cmd, 2000);
+        // ATZ is a chip reset; give it extra time and let the chip settle.
+        await this.send(cmd, cmd === 'ATZ' ? 4000 : 2000);
+        if (cmd === 'ATZ') await sleep(600);
       } catch {
         // non-fatal
       }
     }
 
-    try {
-      const resp = await this.send('0100', 3000);
-      if (resp.includes('UNABLE') || resp.includes('NO DATA')) {
-        this.emit({
-          state: 'error',
-          errorMsg: 'Adapter connected but car ECU not responding. Turn ignition ON.',
-        });
-        return;
-      }
-    } catch {
+    // Probe ECU. The first PID request triggers ELM327 auto-protocol search,
+    // which can take 5–15s even with the ignition on. Retry once before giving up.
+    const probeOk = await this.probeEcu();
+    if (!probeOk) {
       this.emit({ state: 'error', errorMsg: 'ECU not responding. Turn ignition ON.' });
       return;
     }
@@ -218,6 +218,19 @@ export class OBDManager {
     this.polling = true;
     this.emit({ state: 'ready', errorMsg: null });
     this.pollLoop();
+  }
+
+  private async probeEcu(): Promise<boolean> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const resp = await this.send('0100', 15000);
+        if (isEcuUnreachable(resp)) continue;
+        if (/[0-9A-F]{2}\s+[0-9A-F]{2}/i.test(resp)) return true;
+      } catch {
+        // timeout — fall through to retry
+      }
+    }
+    return false;
   }
 
   private async send(cmd: string, timeoutMs = 2000): Promise<string> {
@@ -352,9 +365,28 @@ export class OBDManager {
   }
 }
 
+function isEcuUnreachable(resp: string): boolean {
+  const s = resp.toUpperCase();
+  return (
+    s.includes('UNABLE') ||
+    s.includes('NO DATA') ||
+    s.includes('BUS INIT') ||
+    s.includes('CAN ERROR') ||
+    s.includes('STOPPED') ||
+    s.includes('BUFFER FULL') ||
+    s.trim() === '?'
+  );
+}
+
 function parseHexResponse(raw: string): number[] | null {
-  const clean = raw.replace(/[^0-9A-Fa-f\s]/g, '').trim();
-  const parts = clean.split(/\s+/);
+  // Strip transient ELM327 status lines so they don't get parsed as hex.
+  const cleaned = raw
+    .split(/[\r\n]+/)
+    .map((l) => l.trim())
+    .filter((l) => l && !/^SEARCHING/i.test(l) && !/^BUS /i.test(l))
+    .join(' ');
+  const hexOnly = cleaned.replace(/[^0-9A-Fa-f\s]/g, '').trim();
+  const parts = hexOnly.split(/\s+/).filter(Boolean);
   if (parts.length < 3) return null;
   try {
     return parts.slice(2).map((h) => parseInt(h, 16));
