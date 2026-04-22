@@ -3,14 +3,13 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "react-native start",
+    "start": "node ./scripts/start-metro.js",
     "android": "react-native run-android",
     "ios": "react-native run-ios",
     "stamp": "./scripts/stamp-icon.sh",
     "predevice": "./scripts/stamp-icon.sh",
     "device": "react-native run-ios --device",
-    "update": "./scripts/run-latest.sh",
-    "postinstall": "node ./scripts/patch-metro-start.js"
+    "update": "./scripts/run-latest.sh"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.2.0",
