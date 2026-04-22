@@ -5,11 +5,22 @@
 //   Severity    → Sentry event level → expected response
 //   CRITICAL    → fatal  → page on-call immediately (#incidents)
 //   HIGH        → error  → Slack alert within minutes (#alerts)
-//   MEDIUM      → warning→ alert only when frequency threshold is crossed (#monitoring)
-//   LOW         → info   → captured for debugging; daily digest at most
+//   MEDIUM      → warning→ alert only when error rate threshold is crossed (#monitoring)
+//   LOW         → info   → captured for debugging only; no alert rule
 //
-// For each scenario, alertPolicy.frequencyThreshold describes the Sentry alert
-// rule you should configure: "alert if N events occur within M minutes".
+// "When to fire" is expressed as an error-rate percentage, not a raw count,
+// so thresholds stay meaningful as traffic scales. Two flavours:
+//
+//   rateThreshold      — alert when errors exceed `pct` % of `of`-type events
+//                        within a rolling `windowMinutes` window.
+//   crashFreeRateBelow — alert when Sentry's crash_free_rate(sessions) metric
+//                        drops below this %. Mobile industry baselines:
+//                          ≥ 99.5 % = healthy
+//                          < 99.5 % = degraded  (HIGH)
+//                          < 99.0 % = critical  (CRITICAL)
+//
+// See the "Sentry alert rule cheatsheet" at the bottom of this file for exact
+// Sentry UI configuration steps.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export enum Severity {
@@ -27,16 +38,40 @@ export const SENTRY_LEVEL: Record<Severity, 'fatal' | 'error' | 'warning' | 'inf
   [Severity.LOW]: 'info',
 };
 
+export interface RateThreshold {
+  /**
+   * Alert fires when this percentage of the denominator events fail.
+   * e.g. pct: 2 means "more than 2 % of connection attempts errored".
+   */
+  pct: number;
+  /**
+   * Denominator that defines what the percentage is calculated against.
+   *   sessions            → % of user sessions affected (use crash_free_rate or custom)
+   *   connection_attempts → % of OBD connect() calls that resulted in error
+   *   auth_attempts       → % of sendOTP / confirmOTP calls that errored
+   *   events              → % of raw captured events (for noisy signals)
+   */
+  of: 'sessions' | 'connection_attempts' | 'auth_attempts' | 'events';
+  /** Rolling window over which the rate is measured. */
+  windowMinutes: number;
+}
+
 export interface AlertPolicy {
   /** True → fire a notification the moment the first event arrives. */
   notifyImmediately: boolean;
   /** Slack/PagerDuty channel to target in your Sentry alert rule. */
   slackChannel?: string;
   /**
-   * Fire an alert when `count` events occur within `windowMinutes`.
-   * Omit for CRITICAL — those always alert on the first occurrence.
+   * Percentage-based trigger. Omit for CRITICAL scenarios that should fire
+   * on the first occurrence regardless of rate.
    */
-  frequencyThreshold?: { count: number; windowMinutes: number };
+  rateThreshold?: RateThreshold;
+  /**
+   * Session-level crash health gate. Alert when Sentry's crash_free_rate(sessions)
+   * drops below this value. Only meaningful for CRITICAL scenarios that represent
+   * complete session failures (app crash, total connection loss).
+   */
+  crashFreeRateBelow?: number;
 }
 
 export interface AlertScenario {
@@ -60,6 +95,8 @@ export const SCENARIO_APP_CRASH: AlertScenario = {
   alertPolicy: {
     notifyImmediately: true,
     slackChannel: '#incidents',
+    // Alert the moment crash-free sessions drop below the healthy baseline.
+    crashFreeRateBelow: 99.5,
   },
 };
 
@@ -72,8 +109,8 @@ export const SCENARIO_OBD_ADAPTER_NOT_FOUND: AlertScenario = {
   alertPolicy: {
     notifyImmediately: true,
     slackChannel: '#incidents',
-    // Alert immediately on first occurrence; if it spikes it signals a wider BLE issue.
-    frequencyThreshold: { count: 5, windowMinutes: 60 },
+    // > 2 % of connection attempts failing in 15 min = systemic BLE issue, not user error.
+    rateThreshold: { pct: 2.0, of: 'connection_attempts', windowMinutes: 15 },
   },
 };
 
@@ -86,6 +123,8 @@ export const SCENARIO_OBD_CONNECTION_EXHAUSTED: AlertScenario = {
   alertPolicy: {
     notifyImmediately: true,
     slackChannel: '#incidents',
+    // Any session that reaches this state is fully lost. Alert below the critical threshold.
+    crashFreeRateBelow: 99.0,
   },
 };
 
@@ -102,7 +141,8 @@ export const SCENARIO_ECU_NOT_RESPONDING: AlertScenario = {
   alertPolicy: {
     notifyImmediately: false,
     slackChannel: '#alerts',
-    frequencyThreshold: { count: 5, windowMinutes: 30 },
+    // 3 % failure is the ceiling for "user had ignition off"; above that is a protocol bug.
+    rateThreshold: { pct: 3.0, of: 'connection_attempts', windowMinutes: 30 },
   },
 };
 
@@ -116,7 +156,8 @@ export const SCENARIO_OBD_KEEPALIVE_FAILED: AlertScenario = {
   alertPolicy: {
     notifyImmediately: false,
     slackChannel: '#alerts',
-    frequencyThreshold: { count: 5, windowMinutes: 15 },
+    // > 2 % of active sessions hitting keepalive failure in 15 min = BLE regression.
+    rateThreshold: { pct: 2.0, of: 'sessions', windowMinutes: 15 },
   },
 };
 
@@ -130,7 +171,8 @@ export const SCENARIO_AUTH_SEND_OTP_FAILED: AlertScenario = {
   alertPolicy: {
     notifyImmediately: false,
     slackChannel: '#alerts',
-    frequencyThreshold: { count: 3, windowMinutes: 10 },
+    // 5 % of SMS dispatch attempts failing = Firebase quota or network issue.
+    rateThreshold: { pct: 5.0, of: 'auth_attempts', windowMinutes: 10 },
   },
 };
 
@@ -144,13 +186,14 @@ export const SCENARIO_AUTH_VERIFY_OTP_FAILED: AlertScenario = {
   alertPolicy: {
     notifyImmediately: false,
     slackChannel: '#alerts',
-    // Individual user mistakes are expected; alert only on a spike.
-    frequencyThreshold: { count: 10, windowMinutes: 10 },
+    // 10 % threshold: wrong codes are expected from real users; only a spike signals
+    // a Firebase Auth outage or a broken verification flow.
+    rateThreshold: { pct: 10.0, of: 'auth_attempts', windowMinutes: 10 },
   },
 };
 
 // ─── MEDIUM ──────────────────────────────────────────────────────────────────
-// Degraded state that is self-recoverable. Alert only if volume spikes.
+// Degraded state that is self-recoverable. Alert only if the rate spikes.
 
 export const SCENARIO_OBD_RECONNECTING: AlertScenario = {
   id: 'obd_reconnecting',
@@ -162,7 +205,9 @@ export const SCENARIO_OBD_RECONNECTING: AlertScenario = {
   alertPolicy: {
     notifyImmediately: false,
     slackChannel: '#monitoring',
-    frequencyThreshold: { count: 20, windowMinutes: 60 },
+    // BLE reconnects happen on phone-lock, brief signal drops, etc. 20 % over an hour
+    // is the threshold where it becomes a firmware or driver regression signal.
+    rateThreshold: { pct: 20.0, of: 'sessions', windowMinutes: 60 },
   },
 };
 
@@ -176,12 +221,13 @@ export const SCENARIO_AUTH_RESEND_OTP_FAILED: AlertScenario = {
   alertPolicy: {
     notifyImmediately: false,
     slackChannel: '#monitoring',
-    frequencyThreshold: { count: 5, windowMinutes: 30 },
+    // 10 % of resend attempts failing in 30 min suggests a Firebase rate-limit.
+    rateThreshold: { pct: 10.0, of: 'auth_attempts', windowMinutes: 30 },
   },
 };
 
 // ─── LOW ─────────────────────────────────────────────────────────────────────
-// Minor issues captured for debugging. No immediate notification needed.
+// Minor issues captured for debugging. No alert rule; visible in Sentry dashboards only.
 
 export const SCENARIO_OBD_CACHED_DEVICE_MISS: AlertScenario = {
   id: 'obd_cached_device_miss',
@@ -192,8 +238,7 @@ export const SCENARIO_OBD_CACHED_DEVICE_MISS: AlertScenario = {
     + 'Normal after adapter power cycles; a high rate may indicate ID churn.',
   alertPolicy: {
     notifyImmediately: false,
-    slackChannel: '#monitoring',
-    frequencyThreshold: { count: 50, windowMinutes: 60 },
+    // No rateThreshold — captured for debugging dashboards, not for alerting.
   },
 };
 
@@ -206,7 +251,7 @@ export const SCENARIO_OBD_PID_TIMEOUT: AlertScenario = {
     + 'one-off timeouts are harmless. A sustained rate signals link degradation.',
   alertPolicy: {
     notifyImmediately: false,
-    frequencyThreshold: { count: 100, windowMinutes: 5 },
+    // No rateThreshold — individual timeouts are noise; visible in Sentry dashboards only.
   },
 };
 
@@ -225,3 +270,32 @@ export const ALL_SCENARIOS: AlertScenario[] = [
   SCENARIO_OBD_CACHED_DEVICE_MISS,
   SCENARIO_OBD_PID_TIMEOUT,
 ];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sentry alert rule cheatsheet
+//
+// In your Sentry project go to Alerts → Create Alert → Metric Alert.
+//
+// ── CRITICAL: crash-free session rate (app_crash, obd_connection_exhausted) ─
+//   Metric:    crash_free_rate(sessions)
+//   Condition: is below <crashFreeRateBelow>%
+//   Window:    1 hour  (rolling)
+//   Action:    notify #incidents + PagerDuty
+//
+// ── CRITICAL / HIGH / MEDIUM: error rate (all rateThreshold scenarios) ──────
+//   Metric:    percentage(event.count(), sessions)  ← or custom transaction metric
+//   Filter:    tag:scenario_id = "<scenario.id>"
+//   Condition: is above <rateThreshold.pct>%
+//   Window:    <rateThreshold.windowMinutes> minutes
+//   Action:    notify the channel in slackChannel
+//
+//   Note: Sentry's free-tier Metric Alerts support session-based metrics.
+//   For `connection_attempts` and `auth_attempts` denominators you need to emit
+//   a custom metric counter (e.g. Sentry.metrics.increment('obd.connect.attempt'))
+//   at each attempt site, then build the alert as
+//   "percentage(errors, obd.connect.attempt) > pct".
+//
+// ── LOW scenarios ────────────────────────────────────────────────────────────
+//   No alert rules. Add scenario_id as a filter in Sentry's Issues or
+//   Discover dashboards for ad-hoc debugging.
+// ─────────────────────────────────────────────────────────────────────────────
