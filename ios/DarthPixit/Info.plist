@@ -45,7 +45,9 @@
       <true/>
     </dict>
     <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>Allow MileIQ to connect to your OBD adapter</string>
+    <string>DarthPixit uses Bluetooth to connect to your OBD-II adapter and read live engine data.</string>
+    <key>NSBluetoothPeripheralUsageDescription</key>
+    <string>DarthPixit uses Bluetooth to connect to your OBD-II adapter and read live engine data.</string>
     <key>UIBackgroundModes</key>
     <array>
       <string>bluetooth-central</string>

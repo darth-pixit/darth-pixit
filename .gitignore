@@ -2,8 +2,8 @@
 node_modules/
 
 # Build outputs
-android/build/
 android/app/build/
+android/build/
 ios/build/
 ios/Pods/
 ios/DerivedData/
@@ -37,3 +37,6 @@ android/local.properties
 .vscode/
 .idea/
 *.swp
+
+# Logs
+*.log
