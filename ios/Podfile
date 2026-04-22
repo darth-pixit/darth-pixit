@@ -3,23 +3,26 @@ require File.join(File.dirname(`node --print "require.resolve('react-native/pack
 platform :ios, '15.1'
 install! 'cocoapods', :deterministic_uuids => false
 
-# Required by @react-native-firebase: FirebaseAuth is a Swift pod whose
-# transitive Obj-C dependencies (GoogleUtilities, FirebaseAuthInterop,
-# FirebaseAppCheckInterop, RecaptchaInterop) must expose clang module maps
-# before they can be linked statically.
-use_modular_headers!
+# We deliberately do NOT call `use_modular_headers!` globally. React Native's
+# pods (ReactCommon, React-Core, React-rncore, ...) already ship clang
+# modulemaps via their podspecs (DEFINES_MODULE=YES). A global directive makes
+# CocoaPods synthesize a second modulemap for those pods, producing
+# "Redefinition of module 'ReactCommon'" which corrupts Clang's module graph
+# and cascades into bogus "Could not build module 'Foundation'/'UIKit'/..."
+# errors under Xcode 26. Instead, force modular headers per-pod only on the
+# Firebase Obj-C deps that FirebaseAuth (Swift) needs to see as clang modules
+# for static linkage.
 
 prepare_react_native_project!
 
 target 'DarthPixit' do
-  # Belt-and-suspenders: even with use_modular_headers! at the Podfile root,
-  # some CocoaPods versions don't propagate modular_headers to transitive
-  # deps pulled in via use_native_modules!. Declaring these pods explicitly
-  # forces modular headers regardless of CocoaPods version.
-  pod 'GoogleUtilities', :modular_headers => true
-  pod 'FirebaseAuthInterop', :modular_headers => true
+  pod 'FirebaseCore',            :modular_headers => true
+  pod 'FirebaseCoreInternal',    :modular_headers => true
+  pod 'FirebaseCoreExtension',   :modular_headers => true
+  pod 'FirebaseAuthInterop',     :modular_headers => true
   pod 'FirebaseAppCheckInterop', :modular_headers => true
-  pod 'RecaptchaInterop', :modular_headers => true
+  pod 'GoogleUtilities',         :modular_headers => true
+  pod 'RecaptchaInterop',        :modular_headers => true
 
   config = use_native_modules!
 

@@ -21,19 +21,42 @@ if [ ! -f "$ORIG" ]; then
 fi
 
 VERSION="$(node -p "require('$REPO_ROOT/package.json').version" 2>/dev/null || echo 'dev')"
-echo "==> Stamping icon with v$VERSION…"
+echo "==> Stamping icon with v${VERSION}..."
 
-# Draw a semi-transparent banner across the bottom third of the icon,
-# then write the version in large white bold text centred over it.
-convert "$ORIG" \
-  \( -clone 0 -crop 1024x340+0+684 +repage \
-     -fill '#00000099' -colorize 100 \) \
-  -gravity South -composite \
-  -fill white \
-  -font Helvetica-Bold \
-  -pointsize 160 \
-  -gravity South \
-  -annotate +0+90 "v$VERSION" \
-  "$OUT"
+# Pick a font file that actually exists on this machine. Modern ImageMagick
+# on macOS can't resolve fonts by PostScript name, so we need a direct path.
+FONT=""
+for candidate in \
+  "/System/Library/Fonts/Helvetica.ttc" \
+  "/System/Library/Fonts/HelveticaNeue.ttc" \
+  "/System/Library/Fonts/Supplemental/Arial Bold.ttf" \
+  "/System/Library/Fonts/SFNS.ttf" \
+  "/Library/Fonts/Arial Bold.ttf"; do
+  if [ -f "$candidate" ]; then
+    FONT="$candidate"
+    break
+  fi
+done
 
-echo "   Done → $OUT"
+stamp_ok=0
+if [ -n "$FONT" ]; then
+  if convert "$ORIG" \
+    \( -clone 0 -crop 1024x340+0+684 +repage \
+       -fill '#00000099' -colorize 100 \) \
+    -gravity South -composite \
+    -fill white \
+    -font "$FONT" \
+    -pointsize 160 \
+    -gravity South \
+    -annotate +0+90 "v$VERSION" \
+    "$OUT" 2>/dev/null; then
+    stamp_ok=1
+  fi
+fi
+
+if [ "$stamp_ok" -ne 1 ]; then
+  echo "   Font stamping unavailable; using unstamped icon."
+  cp "$ORIG" "$OUT"
+fi
+
+echo "   Done -> $OUT"
