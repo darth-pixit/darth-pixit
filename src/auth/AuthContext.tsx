@@ -1,6 +1,13 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import auth, { FirebaseAuthTypes } from '@react-native-firebase/auth';
 
+// iOS debug builds have no push notification entitlements, so Firebase phone
+// auth hangs waiting for APNs registration that never completes. Disable app
+// verification at module load time — well before any signInWithPhoneNumber call.
+if (__DEV__) {
+  auth().settings.appVerificationDisabledForTesting = true;
+}
+
 interface AuthContextValue {
   user: FirebaseAuthTypes.User | null;
   initializing: boolean;
@@ -16,13 +23,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [initializing, setInitializing] = useState(true);
 
   useEffect(() => {
-    // Firebase phone auth on iOS uses APNs to verify the app before sending OTP.
-    // APNs is unavailable in debug builds, so disable app verification in dev
-    // so it falls straight through to the OTP send (test numbers still work).
-    if (__DEV__) {
-      auth().settings.appVerificationDisabledForTesting = true;
-    }
-
     const unsubscribe = auth().onAuthStateChanged(
       (u) => {
         setUser(u);
