@@ -20,14 +20,8 @@ export function RootNavigator() {
     if (!user) setAuthStep({ step: 'phone' });
   }, [user]);
 
-  if (initializing) {
-    return (
-      <View style={styles.splash}>
-        <ActivityIndicator size="large" color="#22C55E" />
-      </View>
-    );
-  }
-
+  // Render auth screens immediately when there's no confirmed user — no reason
+  // to block behind a Firebase spinner for a user who needs to log in anyway.
   if (!user) {
     if (authStep.step === 'otp') {
       return (
@@ -44,6 +38,16 @@ export function RootNavigator() {
           setAuthStep({ step: 'otp', confirmation, phone })
         }
       />
+    );
+  }
+
+  // User exists but Firebase hasn't finished initialising — hold here to avoid
+  // rendering ThrottleView against a partially-resolved session.
+  if (initializing) {
+    return (
+      <View style={styles.splash}>
+        <ActivityIndicator size="large" color="#22C55E" />
+      </View>
     );
   }
 
