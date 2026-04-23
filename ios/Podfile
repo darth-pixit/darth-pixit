@@ -16,6 +16,13 @@ install! 'cocoapods', :deterministic_uuids => false
 prepare_react_native_project!
 
 target 'DarthPixit' do
+  # FirebaseAuth is a Swift pod; RNFBAuth (Obj-C bridge) imports
+  # <FirebaseAuth/FirebaseAuth-Swift.h>, which is only exposed via the
+  # framework-path header when FirebaseAuth itself is a clang module.
+  # Same applies to other Swift Firebase pods pulled in transitively.
+  pod 'FirebaseAuth',            :modular_headers => true
+  pod 'FirebaseAppCheck',        :modular_headers => true
+  pod 'FirebaseSharedSwift',     :modular_headers => true
   pod 'FirebaseCore',            :modular_headers => true
   pod 'FirebaseCoreInternal',    :modular_headers => true
   pod 'FirebaseCoreExtension',   :modular_headers => true
