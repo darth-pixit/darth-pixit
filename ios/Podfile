@@ -21,6 +21,8 @@ target 'DarthPixit' do
   pod 'FirebaseCoreExtension',   :modular_headers => true
   pod 'FirebaseAuthInterop',     :modular_headers => true
   pod 'FirebaseAppCheckInterop', :modular_headers => true
+  pod 'FirebaseAuth',            :modular_headers => true
+  pod 'FirebaseSharedSwift',     :modular_headers => true
   pod 'GoogleUtilities',         :modular_headers => true
   pod 'RecaptchaInterop',        :modular_headers => true
 
@@ -38,6 +40,19 @@ target 'DarthPixit' do
       config[:reactNativePath],
       :mac_catalyst_enabled => false,
     )
+
+    # Pin every pod to the app's minimum iOS version so that pods don't
+    # accidentally default to the host SDK version (iOS 26) when built with
+    # Xcode 26, which breaks React Native 0.76.x headers and causes
+    # Libtool failures due to compile errors against iOS-26-only APIs.
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        current = config.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
+        if current.nil? || current.to_f < 15.1
+          config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.1'
+        end
+      end
+    end
 
     installer.target_installation_results.pod_target_installation_results
       .each do |pod_name, target_installation_result|
