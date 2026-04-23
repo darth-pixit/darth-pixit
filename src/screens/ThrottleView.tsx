@@ -167,7 +167,7 @@ export function ThrottleView() {
     extrapolate: 'clamp',
   });
 
-  const obdConnected = state !== 'idle';
+  const obdConnected = state === 'ready' || state === 'reconnecting' || state === 'connecting' || state === 'scanning';
 
   return (
     <SafeAreaView style={styles.safe}>
