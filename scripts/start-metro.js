@@ -20,7 +20,7 @@ const { loadConfig } = require('metro-config');
 async function main() {
   const config = await loadConfig({ cwd: process.cwd() });
   const port = config.server.port || 8081;
-  const host = process.env.RCT_METRO_HOST || 'localhost';
+  const host = process.env.RCT_METRO_HOST || '0.0.0.0';
   const serverBaseUrl = `http://${host}:${port}`;
 
   const extraMiddleware = [];
