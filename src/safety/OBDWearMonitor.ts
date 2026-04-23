@@ -180,6 +180,7 @@ export class OBDWearMonitor {
   }
 
   private checkRPM(rpm: number, t: number): void {
+    if (this.cfg.vehicleRedlineRPM <= 0) return;
     const ratio = rpm / this.cfg.vehicleRedlineRPM;
     const threshold = 0.85;
     // Re-fire at most once per 10 s while the condition persists, regardless

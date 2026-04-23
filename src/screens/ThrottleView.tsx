@@ -136,6 +136,8 @@ export function ThrottleView() {
       } else {
         fr = fuelRateRef.current ?? 0;
         sp = speedRef.current ?? 0;
+        if (!Number.isFinite(fr)) fr = 0;
+        if (!Number.isFinite(sp)) sp = 0;
       }
       if (fr > 0.1 && sp > 0.5) {
         tripFuelRef.current += fr * dt;

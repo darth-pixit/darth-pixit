@@ -36,7 +36,8 @@ export function PhoneScreen({ onConfirmation }: Props) {
       const confirmation = await sendOTP(formatted);
       onConfirmation(confirmation, formatted);
     } catch (e: any) {
-      Alert.alert('Error', e?.message ?? 'Failed to send OTP. Check the number and try again.');
+      const msg = typeof e === 'string' ? e : (e?.message ?? 'Failed to send OTP. Check the number and try again.');
+      Alert.alert('Error', msg);
     } finally {
       setLoading(false);
     }

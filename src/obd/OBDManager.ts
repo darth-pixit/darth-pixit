@@ -388,6 +388,8 @@ export class OBDManager {
     // which can take 5–15s even with the ignition on. Retry once before giving up.
     const probeOk = await this.probeEcu();
     if (!probeOk) {
+      this.notifySubscription?.remove();
+      this.notifySubscription = null;
       if (this.active) this.emit({ state: 'error', errorMsg: 'ECU not responding. Turn ignition ON.' });
       return;
     }
