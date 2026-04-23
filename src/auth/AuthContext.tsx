@@ -16,13 +16,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [initializing, setInitializing] = useState(true);
 
   useEffect(() => {
-    // Firebase phone auth on iOS uses APNs to verify the app before sending OTP.
-    // APNs is unavailable in debug builds, so disable app verification in dev
-    // so it falls straight through to the OTP send (test numbers still work).
-    if (__DEV__) {
-      auth().settings.appVerificationDisabledForTesting = true;
-    }
-
     const unsubscribe = auth().onAuthStateChanged(
       (u) => {
         setUser(u);
