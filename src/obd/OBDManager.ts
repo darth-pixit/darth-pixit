@@ -569,8 +569,15 @@ export class OBDManager {
 
         this.computeFuelRate();
         this.emitCurrent();
-      } catch {
-        // Timeout on individual PID — skip, don't crash the loop
+      } catch (e: any) {
+        // A BLE-level error (device disconnected, etc.) should trigger reconnect
+        // immediately rather than waiting for the ATI keepalive checkpoint.
+        // Plain PID timeouts are safe to skip.
+        if (this.polling && e?.message && !e.message.includes('timeout')) {
+          this.log(`poll: BLE error, reconnecting — ${e.message}`);
+          this.scheduleReconnect();
+          return;
+        }
       }
 
       this.tickCount++;
@@ -594,13 +601,27 @@ export class OBDManager {
     if (!bytes) return;
     const [A, B] = bytes;
     switch (pid) {
-      case '010C': this.data.rpm = ((A * 256) + B) / 4; break;
-      case '010D': this.data.speedKmH = A; break;
-      case '0110': this.data.mafGPerS = ((A * 256) + B) / 100; break;
-      case '010B': this.data.mapKPa = A; break;
-      case '010F': this.data.iatC = A - 40; break;
-      case '0104': this.data.engineLoadPct = (A * 100) / 255; break;
-      case '0105': this.data.coolantC = A - 40; break;
+      case '010C':
+        if (bytes.length >= 2) this.data.rpm = ((A * 256) + B) / 4;
+        break;
+      case '010D':
+        this.data.speedKmH = A;
+        break;
+      case '0110':
+        if (bytes.length >= 2) this.data.mafGPerS = ((A * 256) + B) / 100;
+        break;
+      case '010B':
+        this.data.mapKPa = A;
+        break;
+      case '010F':
+        this.data.iatC = A - 40;
+        break;
+      case '0104':
+        this.data.engineLoadPct = (A * 100) / 255;
+        break;
+      case '0105':
+        this.data.coolantC = A - 40;
+        break;
     }
   }
 
@@ -625,6 +646,7 @@ export class OBDManager {
       return;
     }
 
+    this.data.fuelRateLPerH = null;
     this.data.fuelCalcMethod = 'none';
   }
 
@@ -674,7 +696,7 @@ function parseHexResponse(raw: string): number[] | null {
 
   // Support both spaced format ("41 00 BE 3E") and compact format ("4100BE3E").
   let parts = hexOnly.split(/\s+/).filter(Boolean);
-  if (parts.length < 3 && parts.length === 1) {
+  if (parts.length === 1) {
     const m = parts[0].match(/.{2}/g);
     if (m) parts = m;
   }
