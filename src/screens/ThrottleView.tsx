@@ -16,6 +16,7 @@ import { OBDStatusBanner } from '../obd/OBDStatusBanner';
 import { VehicleCfg } from '../obd/OBDManager';
 import { useAuth } from '../auth/AuthContext';
 import { useAutoConnect } from '../obd/useAutoConnect';
+import { VitalsScreen } from './VitalsScreen';
 
 const { width: SW } = Dimensions.get('window');
 const PAD = 24;
@@ -81,6 +82,7 @@ export function ThrottleView() {
   const [demoThrottle, setDemoThrottle] = useState(0);
   const [tripAvgKmL, setTripAvgKmL] = useState<number | null>(null);
   const [setupBlocked, setSetupBlocked] = useState(false);
+  const [showVitals, setShowVitals] = useState(false);
 
   // Refs so the accumulation interval always reads fresh values
   const demoThrottleRef = useRef(demoThrottle);
@@ -346,6 +348,15 @@ export function ThrottleView() {
           </TouchableOpacity>
         </View>
 
+        {/* All Vitals (full diagnostic readout) */}
+        <TouchableOpacity
+          style={styles.vitalsBtn}
+          onPress={() => setShowVitals(true)}
+        >
+          <Text style={styles.vitalsText}>View All Vitals</Text>
+          <Text style={styles.vitalsChevron}></Text>
+        </TouchableOpacity>
+
         {/* Sign out */}
         <TouchableOpacity
           style={styles.signOutBtn}
@@ -360,6 +371,8 @@ export function ThrottleView() {
         </TouchableOpacity>
 
       </View>
+
+      <VitalsScreen visible={showVitals} onClose={() => setShowVitals(false)} />
     </SafeAreaView>
   );
 }
@@ -519,6 +532,28 @@ const styles = StyleSheet.create({
   btnOutline: { borderWidth: 1, borderColor: '#2a2a2a' },
   btnText: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
   btnTextMuted: { color: '#555' },
+  vitalsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#1F1F1F',
+    backgroundColor: '#111',
+  },
+  vitalsText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+    letterSpacing: 0.3,
+  },
+  vitalsChevron: {
+    color: '#555',
+    fontSize: 18,
+    lineHeight: 18,
+  },
   signOutBtn: {
     alignItems: 'center',
     paddingVertical: 6,
