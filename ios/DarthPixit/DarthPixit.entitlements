@@ -4,8 +4,6 @@
   <dict>
     <key>aps-environment</key>
     <string>development</string>
-    <!-- Fuel/energy apps category. Requires Apple Developer portal approval before App Store distribution.
-         Works in the iOS Simulator CarPlay window without approval for testing. -->
     <key>com.apple.developer.carplay-fuel</key>
     <true/>
   </dict>
