@@ -49,13 +49,14 @@ export type WearSignalListener = (signal: WearSignal) => void;
 interface LoadState {
   aboveThresholdSince: number | null;
   latestT: number;
+  lastFiredAt: number;
 }
 
 export class OBDWearMonitor {
   private cfg: SafetyConfig;
   private listener: WearSignalListener | null = null;
 
-  private loadState: LoadState = { aboveThresholdSince: null, latestT: 0 };
+  private loadState: LoadState = { aboveThresholdSince: null, latestT: 0, lastFiredAt: 0 };
   private coolantConsecutiveCount = 0;
 
   private rpmAboveSince = 0;
@@ -115,7 +116,7 @@ export class OBDWearMonitor {
   }
 
   reset(): void {
-    this.loadState = { aboveThresholdSince: null, latestT: 0 };
+    this.loadState = { aboveThresholdSince: null, latestT: 0, lastFiredAt: 0 };
     this.coolantConsecutiveCount = 0;
     this.rpmAboveSince = 0;
     this.rpmLastFiredAt = 0;
@@ -129,26 +130,27 @@ export class OBDWearMonitor {
       }
       this.loadState.latestT = t;
       const durationS = (t - this.loadState.aboveThresholdSince) / 1000;
-      if (durationS >= this.cfg.highLoadMinDurationS) {
-        // Fire once per 30s to avoid spamming while condition persists.
-        const fireInterval = this.cfg.highLoadMinDurationS * 1000;
-        const shouldFire =
-          durationS >= this.cfg.highLoadMinDurationS &&
-          (t - this.loadState.aboveThresholdSince) % fireInterval < 1500;
-        if (shouldFire) {
-          this.emit({
-            type: 'sustained_high_load',
-            value: loadPct,
-            threshold,
-            detectedAt: t,
-            durationS,
-            severity: this.loadSeverity(loadPct),
-            location: this.locationGetter(),
-          });
-        }
+      const fireIntervalMs = this.cfg.highLoadMinDurationS * 1000;
+      const sinceLastFire = t - this.loadState.lastFiredAt;
+      // Use wall-clock re-fire interval, not modulo-on-elapsed, so the rate
+      // is independent of how fast or slow engineLoadPct arrives (low-priority
+      // PID at ~2 s intervals — a modulo window can be jumped over entirely).
+      if (durationS >= this.cfg.highLoadMinDurationS &&
+          (this.loadState.lastFiredAt === 0 || sinceLastFire >= fireIntervalMs)) {
+        this.loadState.lastFiredAt = t;
+        this.emit({
+          type: 'sustained_high_load',
+          value: loadPct,
+          threshold,
+          detectedAt: t,
+          durationS,
+          severity: this.loadSeverity(loadPct),
+          location: this.locationGetter(),
+        });
       }
     } else {
       this.loadState.aboveThresholdSince = null;
+      this.loadState.lastFiredAt = 0;
     }
   }
 

@@ -144,7 +144,7 @@ export function OTPScreen({ confirmation, phone, onBack }: Props) {
                   onKeyPress={(e) => handleKeyPress(e, i)}
                   keyboardType="number-pad"
                   maxLength={1}
-                  editable={!loading}
+                  editable={!loading && !resending}
                   caretHidden
                   selectTextOnFocus
                 />
