@@ -121,10 +121,13 @@ export class OBDManager {
   private writeWithResponse = true;
   private rxBuffer = '';
   private responseResolve: ((s: string) => void) | null = null;
+  private active = false;
   private polling = false;
   private lowPidIndex = 0;
   private tickCount = 0;
   private reconnectAttempt = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private notifySubscription: { remove: () => void } | null = null;
   private cachedDeviceId: string | null = null;
   private vehicle: VehicleCfg | null = null;
   private onUpdate: ((data: OBDData) => void) | null = null;
@@ -146,6 +149,7 @@ export class OBDManager {
   }
 
   async start(vehicle: VehicleCfg) {
+    this.active = true;
     this.vehicle = vehicle;
     this.reconnectAttempt = 0;
     this.logBuf = [];
@@ -154,11 +158,25 @@ export class OBDManager {
   }
 
   async stop() {
+    this.active = false;
     this.log('stop()');
     this.polling = false;
     this.responseResolve = null;
     this.rxBuffer = '';
-    await this.device?.cancelConnection();
+
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    this.notifySubscription?.remove();
+    this.notifySubscription = null;
+
+    try {
+      await this.device?.cancelConnection();
+    } catch {
+      // Already disconnected — ignore.
+    }
     this.device = null;
     this.serviceUuid = null;
     this.writeCharId = null;
@@ -308,13 +326,15 @@ export class OBDManager {
 
     const picked = await this.pickCharacteristics();
     if (!picked) {
-      this.emit({
-        state: 'error',
-        errorMsg:
-          'Incompatible adapter. Found no BLE service with write+notify. ' +
-          'Many cheap "Bluetooth" ELM327 clones are Bluetooth Classic (SPP) ' +
-          'and cannot work on iOS. Check the log for details.',
-      });
+      if (this.active) {
+        this.emit({
+          state: 'error',
+          errorMsg:
+            'Incompatible adapter. Found no BLE service with write+notify. ' +
+            'Many cheap "Bluetooth" ELM327 clones are Bluetooth Classic (SPP) ' +
+            'and cannot work on iOS. Check the log for details.',
+        });
+      }
       return;
     }
 
@@ -326,7 +346,8 @@ export class OBDManager {
         `(${picked.writeWithResponse ? 'withResp' : 'noResp'}) notify=${picked.notifyUuid}`
     );
 
-    this.device.monitorCharacteristicForService(
+    this.notifySubscription?.remove();
+    this.notifySubscription = this.device.monitorCharacteristicForService(
       picked.serviceUuid,
       picked.notifyUuid,
       (err: Error | null, char: Characteristic | null) => {
@@ -367,12 +388,21 @@ export class OBDManager {
     // which can take 5–15s even with the ignition on. Retry once before giving up.
     const probeOk = await this.probeEcu();
     if (!probeOk) {
-      this.emit({ state: 'error', errorMsg: 'ECU not responding. Turn ignition ON.' });
+      this.notifySubscription?.remove();
+      this.notifySubscription = null;
+      if (this.active) this.emit({ state: 'error', errorMsg: 'ECU not responding. Turn ignition ON.' });
       return;
     }
 
-    // One-shot extended PID queries (non-blocking, best-effort)
-    this.probeExtendedPIDs();
+    // One-shot extended PID queries — must complete before pollLoop starts because
+    // both functions call send(), which shares a single responseResolve slot.
+    // Timeouts inside probeExtendedPIDs are short (1.5 s each), so the total
+    // delay is bounded (~10 s worst-case on a vehicle with all PIDs unsupported).
+    await this.probeExtendedPIDs();
+
+    // stop() may have been called while probeExtendedPIDs() was timing out.
+    // If so, bail — don't override the idle state or start a ghost poll loop.
+    if (!this.device) return;
 
     this.reconnectAttempt = 0;
     this.polling = true;
@@ -390,13 +420,13 @@ export class OBDManager {
     for (const pid of SEATBELT_PIDS_M22) {
       try {
         const raw = await this.send(pid, 1500);
-        const bytes = parseHexResponse(raw);
+        const bytes = parseHexResponse(raw, 3);
         if (bytes && bytes.length >= 1) {
           // Bit 0 of the first byte is the seatbelt switch on most implementations.
           // A value of 0 = fastened (circuit closed), 1 = open = unfastened.
           // This is manufacturer-dependent; we mark 'unknown' if we can't confirm.
           const bit = bytes[0] & 0x01;
-          this.data.seatbeltStatus = bit === 0 ? 'fastened' : 'unfastened';
+          this.emit({ seatbeltStatus: bit === 0 ? 'fastened' : 'unfastened' });
           break;
         }
       } catch { /* unsupported — try next */ }
@@ -404,15 +434,16 @@ export class OBDManager {
 
     // TPMS — four sensors, four PIDs
     const tpmsPids = [...TPMS_PIDS_M22];
-    const tpmsKeys: Array<keyof OBDData> = ['tpmsFLKpa', 'tpmsFRKpa', 'tpmsRLKpa', 'tpmsRRKpa'];
+    const tpmsKeys: Array<'tpmsFLKpa' | 'tpmsFRKpa' | 'tpmsRLKpa' | 'tpmsRRKpa'> =
+      ['tpmsFLKpa', 'tpmsFRKpa', 'tpmsRLKpa', 'tpmsRRKpa'];
     for (let i = 0; i < Math.min(tpmsPids.length, tpmsKeys.length); i++) {
       try {
         const raw = await this.send(tpmsPids[i], 1500);
-        const bytes = parseHexResponse(raw);
+        const bytes = parseHexResponse(raw, 3);
         if (bytes && bytes.length >= 2) {
           // Common encoding: kPa = (A * 256 + B) / 4
           const kpa = ((bytes[0] * 256) + bytes[1]) / 4;
-          (this.data as unknown as Record<string, number | null>)[tpmsKeys[i] as string] = kpa;
+          this.emit({ [tpmsKeys[i]]: kpa });
         }
       } catch { /* unsupported */ }
     }
@@ -569,8 +600,15 @@ export class OBDManager {
 
         this.computeFuelRate();
         this.emitCurrent();
-      } catch {
-        // Timeout on individual PID — skip, don't crash the loop
+      } catch (e: any) {
+        // A BLE-level error (device disconnected, etc.) should trigger reconnect
+        // immediately rather than waiting for the ATI keepalive checkpoint.
+        // Plain PID timeouts are safe to skip.
+        if (this.polling && !e?.message?.includes('timeout')) {
+          this.log(`poll: BLE error, reconnecting — ${e.message}`);
+          this.scheduleReconnect();
+          return;
+        }
       }
 
       this.tickCount++;
@@ -594,13 +632,27 @@ export class OBDManager {
     if (!bytes) return;
     const [A, B] = bytes;
     switch (pid) {
-      case '010C': this.data.rpm = ((A * 256) + B) / 4; break;
-      case '010D': this.data.speedKmH = A; break;
-      case '0110': this.data.mafGPerS = ((A * 256) + B) / 100; break;
-      case '010B': this.data.mapKPa = A; break;
-      case '010F': this.data.iatC = A - 40; break;
-      case '0104': this.data.engineLoadPct = (A * 100) / 255; break;
-      case '0105': this.data.coolantC = A - 40; break;
+      case '010C':
+        if (bytes.length >= 2) this.data.rpm = ((A * 256) + B) / 4;
+        break;
+      case '010D':
+        this.data.speedKmH = A;
+        break;
+      case '0110':
+        if (bytes.length >= 2) this.data.mafGPerS = ((A * 256) + B) / 100;
+        break;
+      case '010B':
+        this.data.mapKPa = A;
+        break;
+      case '010F':
+        this.data.iatC = A - 40;
+        break;
+      case '0104':
+        this.data.engineLoadPct = (A * 100) / 255;
+        break;
+      case '0105':
+        this.data.coolantC = A - 40;
+        break;
     }
   }
 
@@ -625,10 +677,12 @@ export class OBDManager {
       return;
     }
 
+    this.data.fuelRateLPerH = null;
     this.data.fuelCalcMethod = 'none';
   }
 
   private scheduleReconnect() {
+    if (!this.active) return;
     this.polling = false;
     this.reconnectAttempt++;
     if (this.reconnectAttempt > 8) {
@@ -637,7 +691,10 @@ export class OBDManager {
     }
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempt - 1), 30000);
     this.emit({ state: 'reconnecting' });
-    setTimeout(() => this.connect(), delay);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
   }
 
   private emit(patch: Partial<OBDData>) {
@@ -663,7 +720,15 @@ function isEcuUnreachable(resp: string): boolean {
   );
 }
 
-function parseHexResponse(raw: string): number[] | null {
+/**
+ * Parse an ELM327 hex response and return the data bytes, stripping the
+ * service/PID echo header.
+ *
+ * headerLen controls how many leading bytes to drop:
+ *   2 = Mode 01 ("41 0C ...")   — default
+ *   3 = Mode 22 ("62 XX XX ...") — extended diagnostics (seatbelt, TPMS)
+ */
+function parseHexResponse(raw: string, headerLen = 2): number[] | null {
   // Strip transient ELM327 status lines so they don't get parsed as hex.
   const cleaned = raw
     .split(/[\r\n]+/)
@@ -674,13 +739,13 @@ function parseHexResponse(raw: string): number[] | null {
 
   // Support both spaced format ("41 00 BE 3E") and compact format ("4100BE3E").
   let parts = hexOnly.split(/\s+/).filter(Boolean);
-  if (parts.length < 3 && parts.length === 1) {
+  if (parts.length === 1) {
     const m = parts[0].match(/.{2}/g);
     if (m) parts = m;
   }
-  if (parts.length < 3) return null;
+  if (parts.length <= headerLen) return null;
   try {
-    return parts.slice(2).map((h) => parseInt(h, 16));
+    return parts.slice(headerLen).map((h) => parseInt(h, 16));
   } catch {
     return null;
   }

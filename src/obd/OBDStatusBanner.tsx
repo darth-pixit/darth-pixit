@@ -38,7 +38,7 @@ export function OBDStatusBanner() {
         <Text style={styles.label} numberOfLines={2}>
           {cfg.label}
         </Text>
-        {state === 'ready' && (
+        {state === 'ready' && fuelCalcMethod !== 'none' && (
           <Text style={styles.method}>{fuelCalcMethod.toUpperCase()}</Text>
         )}
         {canShowLog && state === 'error' && (

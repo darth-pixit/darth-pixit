@@ -1,6 +1,13 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import auth, { FirebaseAuthTypes } from '@react-native-firebase/auth';
 
+// iOS debug builds have no push notification entitlements, so Firebase phone
+// auth hangs waiting for APNs registration that never completes. Disable app
+// verification at module load time — well before any signInWithPhoneNumber call.
+if (__DEV__) {
+  auth().settings.appVerificationDisabledForTesting = true;
+}
+
 interface AuthContextValue {
   user: FirebaseAuthTypes.User | null;
   initializing: boolean;
@@ -16,10 +23,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [initializing, setInitializing] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = auth().onAuthStateChanged((u) => {
-      setUser(u);
-      if (initializing) setInitializing(false);
-    });
+    const unsubscribe = auth().onAuthStateChanged(
+      (u) => {
+        setUser(u);
+        setInitializing(false);
+      },
+      () => {
+        setInitializing(false);
+      },
+    );
     return unsubscribe;
   }, []);
 

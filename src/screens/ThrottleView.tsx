@@ -15,6 +15,7 @@ import { useOBDStore } from '../obd/OBDStore';
 import { OBDStatusBanner } from '../obd/OBDStatusBanner';
 import { VehicleCfg } from '../obd/OBDManager';
 import { useAuth } from '../auth/AuthContext';
+import { useAutoConnect } from '../obd/useAutoConnect';
 
 const { width: SW } = Dimensions.get('window');
 const PAD = 24;
@@ -75,9 +76,11 @@ const DEFAULT_VEHICLE: VehicleCfg = {
 export function ThrottleView() {
   const { engineLoadPct, rpm, state, fuelRateLPerH, speedKmH, start, stop } = useOBDStore();
   const { signOut } = useAuth();
+  const { autoConnectState, completeSetup } = useAutoConnect(DEFAULT_VEHICLE);
   const [isDemoMode, setIsDemoMode] = useState(false);
   const [demoThrottle, setDemoThrottle] = useState(0);
   const [tripAvgKmL, setTripAvgKmL] = useState<number | null>(null);
+  const [setupBlocked, setSetupBlocked] = useState(false);
 
   // Refs so the accumulation interval always reads fresh values
   const demoThrottleRef = useRef(demoThrottle);
@@ -105,7 +108,9 @@ export function ThrottleView() {
 
   const hasLiveData = isDemoMode || state === 'ready';
 
-  // Reset trip accumulators when session ends
+  // Reset trip accumulators when the session ends OR when demo mode is toggled.
+  // Without the isDemoMode reset, switching modes while OBD is live pollutes
+  // the trip average by mixing real and simulated fuel/distance figures.
   useEffect(() => {
     if (!hasLiveData) {
       tripFuelRef.current = 0;
@@ -113,6 +118,12 @@ export function ThrottleView() {
       setTripAvgKmL(null);
     }
   }, [hasLiveData]);
+
+  useEffect(() => {
+    tripFuelRef.current = 0;
+    tripDistRef.current = 0;
+    setTripAvgKmL(null);
+  }, [isDemoMode]);
 
   // Accumulate fuel & distance every 500ms to compute trip average
   useEffect(() => {
@@ -128,6 +139,8 @@ export function ThrottleView() {
       } else {
         fr = fuelRateRef.current ?? 0;
         sp = speedRef.current ?? 0;
+        if (!Number.isFinite(fr)) fr = 0;
+        if (!Number.isFinite(sp)) sp = 0;
       }
       if (fr > 0.1 && sp > 0.5) {
         tripFuelRef.current += fr * dt;
@@ -167,7 +180,59 @@ export function ThrottleView() {
     extrapolate: 'clamp',
   });
 
-  const obdConnected = state !== 'idle';
+  const obdActive = state === 'ready' || state === 'reconnecting' || state === 'connecting' || state === 'scanning';
+
+  // Idle nudge — differs depending on whether we're scanning or waiting
+  function idleNudge(): string {
+    if (state === 'error') return 'OBD connection failed. Tap Retry or try Demo mode.';
+    if (state === 'idle') return 'OBD adapter disconnected. Tap Reconnect or try Demo mode.';
+    return 'Tap "Try Demo" to preview while the adapter connects.';
+  }
+
+  // --- Onboarding overlay (first launch only) ---
+  if (autoConnectState.phase === 'needs_setup') {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <StatusBar barStyle="light-content" backgroundColor="#0D0D0D" />
+        <View style={styles.onboardingBody}>
+          <Text style={styles.onboardingTitle}>Auto-Connect OBD</Text>
+          <Text style={styles.onboardingBody2}>
+            Darth-Pixit will scan for your OBD Bluetooth adapter every time you open the app and
+            start streaming data automatically — no tapping required after this.
+          </Text>
+          <Text style={styles.onboardingBody2}>
+            Bluetooth access is required to communicate with the adapter.
+          </Text>
+          {setupBlocked && (
+            <Text style={styles.onboardingError}>
+              Bluetooth permission denied. Enable it in Settings and try again.
+            </Text>
+          )}
+          <TouchableOpacity
+            style={[styles.btn, styles.btnPrimary, styles.onboardingCta]}
+            onPress={async () => {
+              setSetupBlocked(false);
+              const ok = await completeSetup();
+              if (!ok) setSetupBlocked(true);
+            }}
+          >
+            <Text style={styles.btnText}>Enable Auto-Connect</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.btn, styles.btnOutline]}
+            onPress={() => setIsDemoMode(true)}
+          >
+            <Text style={[styles.btnText, styles.btnTextMuted]}>Try Demo first</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Show nothing while the AsyncStorage check is in-flight (~1 frame)
+  if (autoConnectState.phase === 'loading') {
+    return <SafeAreaView style={styles.safe} />;
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -179,9 +244,7 @@ export function ThrottleView() {
         {/* Nudge message box */}
         <View style={[styles.nudgeBox, { borderColor: hasLiveData ? zone.color + '55' : '#2a2a2a' }]}>
           <Text style={[styles.nudgeText, { color: hasLiveData ? zone.color : '#555' }]}>
-            {hasLiveData
-              ? zone.nudge
-              : 'Tap "Try Demo" to preview, or connect your OBD adapter.'}
+            {hasLiveData ? zone.nudge : idleNudge()}
           </Text>
         </View>
 
@@ -261,13 +324,16 @@ export function ThrottleView() {
 
         {/* Action buttons */}
         <View style={styles.actions}>
-          {obdConnected ? (
+          {obdActive ? (
             <TouchableOpacity style={[styles.btn, styles.btnDanger]} onPress={() => stop()}>
               <Text style={styles.btnText}>Disconnect OBD</Text>
             </TouchableOpacity>
           ) : (
+            // Only shown after a manual disconnect or terminal error — auto-connect
+            // handles the first connection; the user gets here by tapping Disconnect
+            // or when the adapter can't be found after all retries.
             <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={() => start(DEFAULT_VEHICLE)}>
-              <Text style={styles.btnText}>Connect OBD Adapter</Text>
+              <Text style={styles.btnText}>{state === 'error' ? 'Retry' : 'Reconnect'}</Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity
@@ -461,5 +527,36 @@ const styles = StyleSheet.create({
     color: '#333',
     fontSize: 13,
     fontWeight: '500',
+  },
+
+  // Onboarding screen
+  onboardingBody: {
+    flex: 1,
+    paddingHorizontal: PAD,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 20,
+  },
+  onboardingTitle: {
+    color: '#FFFFFF',
+    fontSize: 26,
+    fontWeight: '700',
+    letterSpacing: -0.5,
+    textAlign: 'center',
+  },
+  onboardingBody2: {
+    color: '#888',
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: 'center',
+  },
+  onboardingError: {
+    color: '#EF4444',
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  onboardingCta: {
+    width: '100%',
+    marginTop: 8,
   },
 });

@@ -49,18 +49,18 @@ export type WearSignalListener = (signal: WearSignal) => void;
 interface LoadState {
   aboveThresholdSince: number | null;
   latestT: number;
+  lastFiredAt: number;
 }
 
 export class OBDWearMonitor {
   private cfg: SafetyConfig;
   private listener: WearSignalListener | null = null;
 
-  private loadState: LoadState = { aboveThresholdSince: null, latestT: 0 };
+  private loadState: LoadState = { aboveThresholdSince: null, latestT: 0, lastFiredAt: 0 };
   private coolantConsecutiveCount = 0;
 
-  /** How many consecutive RPM readings above ratio threshold. */
-  private rpmAboveCount = 0;
   private rpmAboveSince = 0;
+  private rpmLastFiredAt = 0;
 
   private locationGetter: () => { lat: number; lng: number } | null;
 
@@ -116,10 +116,10 @@ export class OBDWearMonitor {
   }
 
   reset(): void {
-    this.loadState = { aboveThresholdSince: null, latestT: 0 };
+    this.loadState = { aboveThresholdSince: null, latestT: 0, lastFiredAt: 0 };
     this.coolantConsecutiveCount = 0;
-    this.rpmAboveCount = 0;
     this.rpmAboveSince = 0;
+    this.rpmLastFiredAt = 0;
   }
 
   private checkEngineLoad(loadPct: number, t: number): void {
@@ -130,26 +130,27 @@ export class OBDWearMonitor {
       }
       this.loadState.latestT = t;
       const durationS = (t - this.loadState.aboveThresholdSince) / 1000;
-      if (durationS >= this.cfg.highLoadMinDurationS) {
-        // Fire once per 30s to avoid spamming while condition persists.
-        const fireInterval = this.cfg.highLoadMinDurationS * 1000;
-        const shouldFire =
-          durationS >= this.cfg.highLoadMinDurationS &&
-          (t - this.loadState.aboveThresholdSince) % fireInterval < 1500;
-        if (shouldFire) {
-          this.emit({
-            type: 'sustained_high_load',
-            value: loadPct,
-            threshold,
-            detectedAt: t,
-            durationS,
-            severity: this.loadSeverity(loadPct),
-            location: this.locationGetter(),
-          });
-        }
+      const fireIntervalMs = this.cfg.highLoadMinDurationS * 1000;
+      const sinceLastFire = t - this.loadState.lastFiredAt;
+      // Use wall-clock re-fire interval, not modulo-on-elapsed, so the rate
+      // is independent of how fast or slow engineLoadPct arrives (low-priority
+      // PID at ~2 s intervals — a modulo window can be jumped over entirely).
+      if (durationS >= this.cfg.highLoadMinDurationS &&
+          (this.loadState.lastFiredAt === 0 || sinceLastFire >= fireIntervalMs)) {
+        this.loadState.lastFiredAt = t;
+        this.emit({
+          type: 'sustained_high_load',
+          value: loadPct,
+          threshold,
+          detectedAt: t,
+          durationS,
+          severity: this.loadSeverity(loadPct),
+          location: this.locationGetter(),
+        });
       }
     } else {
       this.loadState.aboveThresholdSince = null;
+      this.loadState.lastFiredAt = 0;
     }
   }
 
@@ -179,14 +180,19 @@ export class OBDWearMonitor {
   }
 
   private checkRPM(rpm: number, t: number): void {
+    if (this.cfg.vehicleRedlineRPM <= 0) return;
     const ratio = rpm / this.cfg.vehicleRedlineRPM;
     const threshold = 0.85;
+    // Re-fire at most once per 10 s while the condition persists, regardless
+    // of how fast or slow the OBD poll rate is. The old count-based approach
+    // (% 40 readings) would fire after ~400 s at a 1-sample/10-s poll rate.
+    const REFIRE_INTERVAL_MS = 10_000;
     if (ratio >= threshold) {
       if (this.rpmAboveSince === 0) this.rpmAboveSince = t;
-      this.rpmAboveCount++;
       const durationS = (t - this.rpmAboveSince) / 1000;
-      // Require 10 s sustained. OBD RPM comes at ~4 Hz so ~40 readings.
-      if (durationS >= 10 && this.rpmAboveCount % 40 === 0) {
+      const sinceLastFire = t - this.rpmLastFiredAt;
+      if (durationS >= 10 && (this.rpmLastFiredAt === 0 || sinceLastFire >= REFIRE_INTERVAL_MS)) {
+        this.rpmLastFiredAt = t;
         this.emit({
           type: 'high_rpm_ratio',
           value: Math.round(rpm),
@@ -198,8 +204,8 @@ export class OBDWearMonitor {
         });
       }
     } else {
-      this.rpmAboveCount = 0;
       this.rpmAboveSince = 0;
+      this.rpmLastFiredAt = 0;
     }
   }
 
