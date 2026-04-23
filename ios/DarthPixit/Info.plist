@@ -30,6 +30,12 @@
           <string>com.darth.pixit</string>
         </array>
       </dict>
+      <dict>
+        <key>CFBundleURLSchemes</key>
+        <array>
+          <string>app-1-944318753068-ios-e90b6e730502ab2878e489</string>
+        </array>
+      </dict>
     </array>
     <key>CFBundleVersion</key>
     <string>1</string>
