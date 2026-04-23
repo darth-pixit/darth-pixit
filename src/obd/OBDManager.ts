@@ -15,9 +15,35 @@ const KNOWN_SERVICES = [
 const INIT_CMDS = ['ATZ', 'ATE0', 'ATL0', 'ATH0', 'ATAT1', 'ATSP0'];
 
 // High priority (every ~250ms): RPM, Speed, MAF
-// Low priority (every ~2s): Engine Load, IAT, MAP, Coolant
+// Low priority (rotates one per cycle, ~each updates every few seconds):
+//   Engine Load, IAT, MAP, Coolant
+//   + extended vitals shown on the Vitals screen (fuel level, oil temp, battery,
+//     throttle position, fuel pressure, ambient temp, fuel trims, baro, timing,
+//     run time, distance with/since MIL, MIL/DTC status).
 const HIGH_PIDS = ['010C', '010D', '0110'] as const;
-const LOW_PIDS  = ['0104', '010F', '010B', '0105'] as const;
+const LOW_PIDS  = [
+  '0104', // engine load
+  '010F', // intake air temp
+  '010B', // MAP
+  '0105', // coolant
+  '0101', // monitor status: MIL on + DTC count
+  '012F', // fuel tank level
+  '0142', // control module (battery) voltage
+  '015C', // engine oil temp
+  '0111', // throttle position
+  '010A', // fuel pressure (gauge)
+  '0146', // ambient air temp
+  '0143', // absolute load value
+  '0106', // short term fuel trim, bank 1
+  '0107', // long term fuel trim, bank 1
+  '010E', // timing advance
+  '0133', // barometric pressure
+  '011F', // engine run time since start
+  '0121', // distance traveled with MIL on
+  '0131', // distance since codes cleared
+  '014D', // time run with MIL on
+  '014E', // time since codes cleared
+] as const;
 
 /**
  * Extended PID attempts — run once at trip start, not in the hot loop.
@@ -69,6 +95,47 @@ export interface OBDData {
   tpmsFRKpa: number | null;
   tpmsRLKpa: number | null;
   tpmsRRKpa: number | null;
+
+  // Extended vitals (Mode 01) — shown on the Vitals screen.
+  // All null until the rotating low-priority poll picks each one up.
+
+  /** Check Engine Light on. PID 0101 byte A, bit 7. */
+  milOn: boolean | null;
+  /** Stored DTC count. PID 0101 byte A, bits 0..6. */
+  dtcCount: number | null;
+  /** Fuel tank level, percent (0–100). PID 012F. */
+  fuelLevelPct: number | null;
+  /** Engine oil temp, °C. PID 015C. */
+  oilTempC: number | null;
+  /** Battery / control-module voltage, V. PID 0142. */
+  batteryVolts: number | null;
+  /** Absolute throttle position, percent. PID 0111. */
+  throttlePosPct: number | null;
+  /** Fuel rail / line gauge pressure, kPa. PID 010A. */
+  fuelPressureKPa: number | null;
+  /** Ambient (outside) air temp, °C. PID 0146. */
+  ambientTempC: number | null;
+  /** Absolute load (normalized 0–~400%). PID 0143. */
+  absoluteLoadPct: number | null;
+  /** Short-term fuel trim, bank 1, percent (-100..+99). PID 0106. */
+  shortFuelTrim1Pct: number | null;
+  /** Long-term fuel trim, bank 1, percent (-100..+99). PID 0107. */
+  longFuelTrim1Pct: number | null;
+  /** Ignition timing advance for cyl 1, degrees before TDC. PID 010E. */
+  timingAdvanceDeg: number | null;
+  /** Barometric pressure, kPa. PID 0133. */
+  baroPressureKPa: number | null;
+  /** Time the engine has been running this trip, seconds. PID 011F. */
+  engineRunTimeSec: number | null;
+  /** Distance traveled with MIL on, km. PID 0121. */
+  distanceMilOnKm: number | null;
+  /** Distance since DTCs were cleared, km. PID 0131. */
+  distanceSinceClearedKm: number | null;
+  /** Time the engine has run with MIL on, minutes. PID 014D. */
+  timeMilOnMin: number | null;
+  /** Time since DTCs were cleared, minutes. PID 014E. */
+  timeSinceClearedMin: number | null;
+
   errorMsg: string | null;
   debugLog: string[];
 }
@@ -90,6 +157,24 @@ export const defaultOBDData: OBDData = {
   tpmsFRKpa: null,
   tpmsRLKpa: null,
   tpmsRRKpa: null,
+  milOn: null,
+  dtcCount: null,
+  fuelLevelPct: null,
+  oilTempC: null,
+  batteryVolts: null,
+  throttlePosPct: null,
+  fuelPressureKPa: null,
+  ambientTempC: null,
+  absoluteLoadPct: null,
+  shortFuelTrim1Pct: null,
+  longFuelTrim1Pct: null,
+  timingAdvanceDeg: null,
+  baroPressureKPa: null,
+  engineRunTimeSec: null,
+  distanceMilOnKm: null,
+  distanceSinceClearedKm: null,
+  timeMilOnMin: null,
+  timeSinceClearedMin: null,
   errorMsg: null,
   debugLog: [],
 };
@@ -652,6 +737,61 @@ export class OBDManager {
         break;
       case '0105':
         this.data.coolantC = A - 40;
+        break;
+      case '0101':
+        // Byte A: bit 7 = MIL on, bits 0..6 = DTC count.
+        this.data.milOn = (A & 0x80) !== 0;
+        this.data.dtcCount = A & 0x7F;
+        break;
+      case '012F':
+        this.data.fuelLevelPct = (A * 100) / 255;
+        break;
+      case '015C':
+        this.data.oilTempC = A - 40;
+        break;
+      case '0142':
+        if (bytes.length >= 2) this.data.batteryVolts = ((A * 256) + B) / 1000;
+        break;
+      case '0111':
+        this.data.throttlePosPct = (A * 100) / 255;
+        break;
+      case '010A':
+        // Fuel pressure (gauge), kPa = A * 3.
+        this.data.fuelPressureKPa = A * 3;
+        break;
+      case '0146':
+        this.data.ambientTempC = A - 40;
+        break;
+      case '0143':
+        if (bytes.length >= 2) this.data.absoluteLoadPct = ((A * 256) + B) * 100 / 255;
+        break;
+      case '0106':
+        this.data.shortFuelTrim1Pct = (A - 128) * 100 / 128;
+        break;
+      case '0107':
+        this.data.longFuelTrim1Pct = (A - 128) * 100 / 128;
+        break;
+      case '010E':
+        // Timing advance, degrees before TDC = A/2 - 64.
+        this.data.timingAdvanceDeg = A / 2 - 64;
+        break;
+      case '0133':
+        this.data.baroPressureKPa = A;
+        break;
+      case '011F':
+        if (bytes.length >= 2) this.data.engineRunTimeSec = (A * 256) + B;
+        break;
+      case '0121':
+        if (bytes.length >= 2) this.data.distanceMilOnKm = (A * 256) + B;
+        break;
+      case '0131':
+        if (bytes.length >= 2) this.data.distanceSinceClearedKm = (A * 256) + B;
+        break;
+      case '014D':
+        if (bytes.length >= 2) this.data.timeMilOnMin = (A * 256) + B;
+        break;
+      case '014E':
+        if (bytes.length >= 2) this.data.timeSinceClearedMin = (A * 256) + B;
         break;
     }
   }
