@@ -10,10 +10,12 @@
 {
   [FIRApp configure];
 
-  self.moduleName = @"DarthPixit";
+  // Firebase phone auth uses a silent APNs push to verify the app.
+  // Swizzling is disabled (FirebaseAppDelegateProxyEnabled = NO in Info.plist),
+  // so we register manually here and forward the delegate calls below.
+  [application registerForRemoteNotifications];
 
-  // You can add your custom initial props in the dictionary below.
-  // They will be passed down to the ViewController used by React Native.
+  self.moduleName = @"DarthPixit";
   self.initialProps = @{};
 
   return [super application:application didFinishLaunchingWithOptions:launchOptions];
@@ -33,8 +35,11 @@
 #endif
 }
 
-// Linking API
+// Linking API — Firebase Auth intercepts its own URLs (reCAPTCHA callback) first.
 - (BOOL)application:(UIApplication *)application openURL:(NSURL *)url options:(NSDictionary<UIApplicationOpenURLOptionsKey,id> *)options {
+  if ([[FIRAuth auth] canHandleURL:url]) {
+    return YES;
+  }
   return [super application:application openURL:url options:options] || [RCTLinkingManager application:application openURL:url options:options];
 }
 
@@ -44,22 +49,24 @@
   return [super application:application continueUserActivity:userActivity restorationHandler:restorationHandler] || result;
 }
 
-// Explicitly define remote notification delegates to ensure compatibility with some third-party libraries
 - (void)application:(UIApplication *)application didRegisterForRemoteNotificationsWithDeviceToken:(NSData *)deviceToken
 {
-  return [super application:application didRegisterForRemoteNotificationsWithDeviceToken:deviceToken];
+  [[FIRAuth auth] setAPNSToken:deviceToken type:FIRAuthAPNSTokenTypeUnknown];
+  [super application:application didRegisterForRemoteNotificationsWithDeviceToken:deviceToken];
 }
 
-// Explicitly define remote notification delegates to ensure compatibility with some third-party libraries
 - (void)application:(UIApplication *)application didFailToRegisterForRemoteNotificationsWithError:(NSError *)error
 {
-  return [super application:application didFailToRegisterForRemoteNotificationsWithError:error];
+  [super application:application didFailToRegisterForRemoteNotificationsWithError:error];
 }
 
-// Explicitly define remote notification delegates to ensure compatibility with some third-party libraries
 - (void)application:(UIApplication *)application didReceiveRemoteNotification:(NSDictionary *)userInfo fetchCompletionHandler:(void (^)(UIBackgroundFetchResult))completionHandler
 {
-  return [super application:application didReceiveRemoteNotification:userInfo fetchCompletionHandler:completionHandler];
+  if ([[FIRAuth auth] canHandleNotification:userInfo]) {
+    completionHandler(UIBackgroundFetchResultNoData);
+    return;
+  }
+  [super application:application didReceiveRemoteNotification:userInfo fetchCompletionHandler:completionHandler];
 }
 
 @end
