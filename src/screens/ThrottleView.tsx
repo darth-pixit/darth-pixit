@@ -105,7 +105,9 @@ export function ThrottleView() {
 
   const hasLiveData = isDemoMode || state === 'ready';
 
-  // Reset trip accumulators when session ends
+  // Reset trip accumulators when the session ends OR when demo mode is toggled.
+  // Without the isDemoMode reset, switching modes while OBD is live pollutes
+  // the trip average by mixing real and simulated fuel/distance figures.
   useEffect(() => {
     if (!hasLiveData) {
       tripFuelRef.current = 0;
@@ -113,6 +115,12 @@ export function ThrottleView() {
       setTripAvgKmL(null);
     }
   }, [hasLiveData]);
+
+  useEffect(() => {
+    tripFuelRef.current = 0;
+    tripDistRef.current = 0;
+    setTripAvgKmL(null);
+  }, [isDemoMode]);
 
   // Accumulate fuel & distance every 500ms to compute trip average
   useEffect(() => {
