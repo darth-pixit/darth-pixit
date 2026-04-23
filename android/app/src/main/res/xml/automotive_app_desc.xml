@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Declares this app as an Android Auto template app (not navigation/media).
+     Referenced by com.google.android.gms.car.application meta-data in AndroidManifest.xml. -->
+<automotiveApp xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses android:name="template"/>
+</automotiveApp>
