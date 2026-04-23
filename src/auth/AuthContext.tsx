@@ -23,10 +23,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       auth().settings.appVerificationDisabledForTesting = true;
     }
 
-    const unsubscribe = auth().onAuthStateChanged((u) => {
-      setUser(u);
-      setInitializing(false);
-    });
+    const unsubscribe = auth().onAuthStateChanged(
+      (u) => {
+        setUser(u);
+        setInitializing(false);
+      },
+      () => {
+        setInitializing(false);
+      },
+    );
     return unsubscribe;
   }, []);
 
