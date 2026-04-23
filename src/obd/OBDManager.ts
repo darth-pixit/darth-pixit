@@ -125,6 +125,8 @@ export class OBDManager {
   private lowPidIndex = 0;
   private tickCount = 0;
   private reconnectAttempt = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private notifySubscription: { remove: () => void } | null = null;
   private cachedDeviceId: string | null = null;
   private vehicle: VehicleCfg | null = null;
   private onUpdate: ((data: OBDData) => void) | null = null;
@@ -158,7 +160,20 @@ export class OBDManager {
     this.polling = false;
     this.responseResolve = null;
     this.rxBuffer = '';
-    await this.device?.cancelConnection();
+
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    this.notifySubscription?.remove();
+    this.notifySubscription = null;
+
+    try {
+      await this.device?.cancelConnection();
+    } catch {
+      // Already disconnected — ignore.
+    }
     this.device = null;
     this.serviceUuid = null;
     this.writeCharId = null;
@@ -326,7 +341,8 @@ export class OBDManager {
         `(${picked.writeWithResponse ? 'withResp' : 'noResp'}) notify=${picked.notifyUuid}`
     );
 
-    this.device.monitorCharacteristicForService(
+    this.notifySubscription?.remove();
+    this.notifySubscription = this.device.monitorCharacteristicForService(
       picked.serviceUuid,
       picked.notifyUuid,
       (err: Error | null, char: Characteristic | null) => {
@@ -371,8 +387,11 @@ export class OBDManager {
       return;
     }
 
-    // One-shot extended PID queries (non-blocking, best-effort)
-    this.probeExtendedPIDs();
+    // One-shot extended PID queries — must complete before pollLoop starts because
+    // both functions call send(), which shares a single responseResolve slot.
+    // Timeouts inside probeExtendedPIDs are short (1.5 s each), so the total
+    // delay is bounded (~10 s worst-case on a vehicle with all PIDs unsupported).
+    await this.probeExtendedPIDs();
 
     this.reconnectAttempt = 0;
     this.polling = true;
@@ -396,7 +415,7 @@ export class OBDManager {
           // A value of 0 = fastened (circuit closed), 1 = open = unfastened.
           // This is manufacturer-dependent; we mark 'unknown' if we can't confirm.
           const bit = bytes[0] & 0x01;
-          this.data.seatbeltStatus = bit === 0 ? 'fastened' : 'unfastened';
+          this.emit({ seatbeltStatus: bit === 0 ? 'fastened' : 'unfastened' });
           break;
         }
       } catch { /* unsupported — try next */ }
@@ -404,7 +423,8 @@ export class OBDManager {
 
     // TPMS — four sensors, four PIDs
     const tpmsPids = [...TPMS_PIDS_M22];
-    const tpmsKeys: Array<keyof OBDData> = ['tpmsFLKpa', 'tpmsFRKpa', 'tpmsRLKpa', 'tpmsRRKpa'];
+    const tpmsKeys: Array<'tpmsFLKpa' | 'tpmsFRKpa' | 'tpmsRLKpa' | 'tpmsRRKpa'> =
+      ['tpmsFLKpa', 'tpmsFRKpa', 'tpmsRLKpa', 'tpmsRRKpa'];
     for (let i = 0; i < Math.min(tpmsPids.length, tpmsKeys.length); i++) {
       try {
         const raw = await this.send(tpmsPids[i], 1500);
@@ -412,7 +432,7 @@ export class OBDManager {
         if (bytes && bytes.length >= 2) {
           // Common encoding: kPa = (A * 256 + B) / 4
           const kpa = ((bytes[0] * 256) + bytes[1]) / 4;
-          (this.data as unknown as Record<string, number | null>)[tpmsKeys[i] as string] = kpa;
+          this.emit({ [tpmsKeys[i]]: kpa });
         }
       } catch { /* unsupported */ }
     }
@@ -637,7 +657,10 @@ export class OBDManager {
     }
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempt - 1), 30000);
     this.emit({ state: 'reconnecting' });
-    setTimeout(() => this.connect(), delay);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
   }
 
   private emit(patch: Partial<OBDData>) {
@@ -674,7 +697,7 @@ function parseHexResponse(raw: string): number[] | null {
 
   // Support both spaced format ("41 00 BE 3E") and compact format ("4100BE3E").
   let parts = hexOnly.split(/\s+/).filter(Boolean);
-  if (parts.length < 3 && parts.length === 1) {
+  if (parts.length === 1) {
     const m = parts[0].match(/.{2}/g);
     if (m) parts = m;
   }
