@@ -121,6 +121,7 @@ export class OBDManager {
   private writeWithResponse = true;
   private rxBuffer = '';
   private responseResolve: ((s: string) => void) | null = null;
+  private active = false;
   private polling = false;
   private lowPidIndex = 0;
   private tickCount = 0;
@@ -148,6 +149,7 @@ export class OBDManager {
   }
 
   async start(vehicle: VehicleCfg) {
+    this.active = true;
     this.vehicle = vehicle;
     this.reconnectAttempt = 0;
     this.logBuf = [];
@@ -156,6 +158,7 @@ export class OBDManager {
   }
 
   async stop() {
+    this.active = false;
     this.log('stop()');
     this.polling = false;
     this.responseResolve = null;
@@ -323,13 +326,15 @@ export class OBDManager {
 
     const picked = await this.pickCharacteristics();
     if (!picked) {
-      this.emit({
-        state: 'error',
-        errorMsg:
-          'Incompatible adapter. Found no BLE service with write+notify. ' +
-          'Many cheap "Bluetooth" ELM327 clones are Bluetooth Classic (SPP) ' +
-          'and cannot work on iOS. Check the log for details.',
-      });
+      if (this.active) {
+        this.emit({
+          state: 'error',
+          errorMsg:
+            'Incompatible adapter. Found no BLE service with write+notify. ' +
+            'Many cheap "Bluetooth" ELM327 clones are Bluetooth Classic (SPP) ' +
+            'and cannot work on iOS. Check the log for details.',
+        });
+      }
       return;
     }
 
@@ -383,7 +388,7 @@ export class OBDManager {
     // which can take 5–15s even with the ignition on. Retry once before giving up.
     const probeOk = await this.probeEcu();
     if (!probeOk) {
-      this.emit({ state: 'error', errorMsg: 'ECU not responding. Turn ignition ON.' });
+      if (this.active) this.emit({ state: 'error', errorMsg: 'ECU not responding. Turn ignition ON.' });
       return;
     }
 
@@ -593,7 +598,7 @@ export class OBDManager {
         // A BLE-level error (device disconnected, etc.) should trigger reconnect
         // immediately rather than waiting for the ATI keepalive checkpoint.
         // Plain PID timeouts are safe to skip.
-        if (this.polling && e?.message && !e.message.includes('timeout')) {
+        if (this.polling && !e?.message?.includes('timeout')) {
           this.log(`poll: BLE error, reconnecting — ${e.message}`);
           this.scheduleReconnect();
           return;
@@ -671,6 +676,7 @@ export class OBDManager {
   }
 
   private scheduleReconnect() {
+    if (!this.active) return;
     this.polling = false;
     this.reconnectAttempt++;
     if (this.reconnectAttempt > 8) {

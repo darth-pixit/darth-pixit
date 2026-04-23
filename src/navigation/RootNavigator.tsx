@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { FirebaseAuthTypes } from '@react-native-firebase/auth';
 import { useAuth } from '../auth/AuthContext';
@@ -13,6 +13,12 @@ type AuthStep =
 export function RootNavigator() {
   const { user, initializing } = useAuth();
   const [authStep, setAuthStep] = useState<AuthStep>({ step: 'phone' });
+
+  // After sign-out, user becomes null but authStep may still be 'otp' with an
+  // expired confirmation. Reset to phone so the user starts fresh.
+  useEffect(() => {
+    if (!user) setAuthStep({ step: 'phone' });
+  }, [user]);
 
   if (initializing) {
     return (
