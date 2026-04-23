@@ -1,37 +1,28 @@
+# Must be set before any require — tells @react-native-firebase pods to
+# treat Firebase as a static framework rather than a dynamic one, which
+# matches use_frameworks! :linkage => :static below.
+$RNFirebaseAsStaticFramework = true
+
 require File.join(File.dirname(`node --print "require.resolve('react-native/package.json')"`), "scripts/react_native_pods")
 
 platform :ios, '15.1'
 install! 'cocoapods', :deterministic_uuids => false
 
-# We deliberately do NOT call `use_modular_headers!` globally. React Native's
-# pods (ReactCommon, React-Core, React-rncore, ...) already ship clang
-# modulemaps via their podspecs (DEFINES_MODULE=YES). A global directive makes
-# CocoaPods synthesize a second modulemap for those pods, producing
-# "Redefinition of module 'ReactCommon'" which corrupts Clang's module graph
-# and cascades into bogus "Could not build module 'Foundation'/'UIKit'/..."
-# errors under Xcode 26. Instead, force modular headers per-pod only on the
-# Firebase Obj-C deps that FirebaseAuth (Swift) needs to see as clang modules
-# for static linkage.
+# use_frameworks! :linkage => :static (below) is the correct fix for
+# Firebase 11.x, which ships Swift code. Swift-generated headers such as
+# FirebaseAuth-Swift.h only exist inside a .framework bundle — they cannot
+# be resolved via header search paths when pods are static libraries. This
+# is why per-pod :modular_headers => true alone does not work.
+#
+# use_frameworks! does NOT trigger the "Redefinition of module 'ReactCommon'"
+# cascade that use_modular_headers! does, because it creates framework
+# bundles (which own their module maps) rather than synthesising extra maps
+# on top of pods that already ship their own.
 
 prepare_react_native_project!
 
 target 'DarthPixit' do
-  # FirebaseAuth is a Swift pod; RNFBAuth (Obj-C bridge) imports
-  # <FirebaseAuth/FirebaseAuth-Swift.h>, which is only exposed via the
-  # framework-path header when FirebaseAuth itself is a clang module.
-  # Same applies to other Swift Firebase pods pulled in transitively.
-  pod 'FirebaseAuth',            :modular_headers => true
-  pod 'FirebaseAppCheck',        :modular_headers => true
-  pod 'FirebaseSharedSwift',     :modular_headers => true
-  pod 'FirebaseCore',            :modular_headers => true
-  pod 'FirebaseCoreInternal',    :modular_headers => true
-  pod 'FirebaseCoreExtension',   :modular_headers => true
-  pod 'FirebaseAuthInterop',     :modular_headers => true
-  pod 'FirebaseAppCheckInterop', :modular_headers => true
-  pod 'FirebaseAuth',            :modular_headers => true
-  pod 'FirebaseSharedSwift',     :modular_headers => true
-  pod 'GoogleUtilities',         :modular_headers => true
-  pod 'RecaptchaInterop',        :modular_headers => true
+  use_frameworks! :linkage => :static
 
   config = use_native_modules!
 
