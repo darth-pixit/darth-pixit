@@ -27,10 +27,12 @@ interface Props {
 
 export function OTPScreen({ confirmation, phone, onBack }: Props) {
   const { confirmOTP, sendOTP } = useAuth();
+  // Keep a mutable reference to the active confirmation so resend can replace it
+  // without the component re-rendering mid-verification.
+  const activeConfirmation = useRef(confirmation);
   const [digits, setDigits] = useState<string[]>(Array(CODE_LENGTH).fill(''));
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
-  const [activeConfirmation, setActiveConfirmation] = useState(confirmation);
   const inputRefs = useRef<Array<TextInput | null>>(Array(CODE_LENGTH).fill(null));
 
   useEffect(() => {
@@ -78,7 +80,7 @@ export function OTPScreen({ confirmation, phone, onBack }: Props) {
     if (loading) return;
     setLoading(true);
     try {
-      await confirmOTP(activeConfirmation, code);
+      await confirmOTP(activeConfirmation.current, code);
       // onAuthStateChanged in AuthContext will update user → RootNavigator switches screens
     } catch (e: any) {
       Alert.alert('Invalid code', e?.message ?? 'The code you entered is incorrect. Please try again.');
@@ -93,7 +95,7 @@ export function OTPScreen({ confirmation, phone, onBack }: Props) {
     setResending(true);
     try {
       const newConfirmation = await sendOTP(phone);
-      setActiveConfirmation(newConfirmation);
+      activeConfirmation.current = newConfirmation;
       Alert.alert('Sent', 'A new OTP has been sent to your phone.');
       setDigits(Array(CODE_LENGTH).fill(''));
       setTimeout(() => inputRefs.current[0]?.focus(), 50);
