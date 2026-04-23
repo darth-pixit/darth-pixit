@@ -398,6 +398,10 @@ export class OBDManager {
     // delay is bounded (~10 s worst-case on a vehicle with all PIDs unsupported).
     await this.probeExtendedPIDs();
 
+    // stop() may have been called while probeExtendedPIDs() was timing out.
+    // If so, bail — don't override the idle state or start a ghost poll loop.
+    if (!this.device) return;
+
     this.reconnectAttempt = 0;
     this.polling = true;
     this.emit({ state: 'ready', errorMsg: null });
@@ -414,7 +418,7 @@ export class OBDManager {
     for (const pid of SEATBELT_PIDS_M22) {
       try {
         const raw = await this.send(pid, 1500);
-        const bytes = parseHexResponse(raw);
+        const bytes = parseHexResponse(raw, 3);
         if (bytes && bytes.length >= 1) {
           // Bit 0 of the first byte is the seatbelt switch on most implementations.
           // A value of 0 = fastened (circuit closed), 1 = open = unfastened.
@@ -433,7 +437,7 @@ export class OBDManager {
     for (let i = 0; i < Math.min(tpmsPids.length, tpmsKeys.length); i++) {
       try {
         const raw = await this.send(tpmsPids[i], 1500);
-        const bytes = parseHexResponse(raw);
+        const bytes = parseHexResponse(raw, 3);
         if (bytes && bytes.length >= 2) {
           // Common encoding: kPa = (A * 256 + B) / 4
           const kpa = ((bytes[0] * 256) + bytes[1]) / 4;
@@ -714,7 +718,15 @@ function isEcuUnreachable(resp: string): boolean {
   );
 }
 
-function parseHexResponse(raw: string): number[] | null {
+/**
+ * Parse an ELM327 hex response and return the data bytes, stripping the
+ * service/PID echo header.
+ *
+ * headerLen controls how many leading bytes to drop:
+ *   2 = Mode 01 ("41 0C ...")   — default
+ *   3 = Mode 22 ("62 XX XX ...") — extended diagnostics (seatbelt, TPMS)
+ */
+function parseHexResponse(raw: string, headerLen = 2): number[] | null {
   // Strip transient ELM327 status lines so they don't get parsed as hex.
   const cleaned = raw
     .split(/[\r\n]+/)
@@ -729,9 +741,9 @@ function parseHexResponse(raw: string): number[] | null {
     const m = parts[0].match(/.{2}/g);
     if (m) parts = m;
   }
-  if (parts.length < 3) return null;
+  if (parts.length <= headerLen) return null;
   try {
-    return parts.slice(2).map((h) => parseInt(h, 16));
+    return parts.slice(headerLen).map((h) => parseInt(h, 16));
   } catch {
     return null;
   }
