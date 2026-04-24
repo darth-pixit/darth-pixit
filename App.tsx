@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { AuthProvider } from './src/auth/AuthContext';
 import { RootNavigator } from './src/navigation/RootNavigator';
+import { TelemetryDB } from './src/db/TelemetryDB';
+import { TripLogger } from './src/obd/TripLogger';
 
 interface State { error: Error | null }
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, State> {
@@ -20,6 +22,15 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, State
 }
 
 export default function App() {
+  useEffect(() => {
+    TelemetryDB.getInstance()
+      .init()
+      .then(() => TripLogger.getInstance().start())
+      .catch(() => {});
+
+    return () => TripLogger.getInstance().stop();
+  }, []);
+
   return (
     <ErrorBoundary>
       <AuthProvider>

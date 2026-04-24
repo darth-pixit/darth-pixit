@@ -73,6 +73,7 @@ import {
 } from './types';
 import { TripManager } from './TripManager';
 import { SafetyDatabase, KVStore, InMemoryKV } from './SafetyDatabase';
+import { AsyncStorageKV } from '../db/AsyncStorageKV';
 import { SafetyScorer } from './SafetyScorer';
 import { useSafetyStore } from './SafetyStore';
 
@@ -128,7 +129,7 @@ export class SafetyEngine {
     });
   }
 
-  static async create(kv: KVStore = new InMemoryKV()): Promise<SafetyEngine> {
+  static async create(kv: KVStore = new AsyncStorageKV()): Promise<SafetyEngine> {
     const db = new SafetyDatabase(kv);
     const cfg = await db.loadConfig();
     const engine = new SafetyEngine(cfg, db, kv);
