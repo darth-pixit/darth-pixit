@@ -311,7 +311,7 @@ export function ThrottleView() {
   }
 
   // --- Onboarding overlay (first launch only) ---
-  if (autoConnectState.phase === 'needs_setup') {
+  if (!isDemoMode && autoConnectState.phase === 'needs_setup') {
     return (
       <SafeAreaView style={styles.safe}>
         <StatusBar barStyle="light-content" backgroundColor="#0D0D0D" />
