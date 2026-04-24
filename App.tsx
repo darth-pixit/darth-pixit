@@ -1,8 +1,7 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { AuthProvider } from './src/auth/AuthContext';
 import { RootNavigator } from './src/navigation/RootNavigator';
-import { initCarPlay } from './src/carplay/CarPlayService';
 
 interface State { error: Error | null }
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, State> {
@@ -21,8 +20,6 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, State
 }
 
 export default function App() {
-  useEffect(() => { initCarPlay(); }, []);
-
   return (
     <ErrorBoundary>
       <AuthProvider>

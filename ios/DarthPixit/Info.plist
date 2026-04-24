@@ -85,14 +85,12 @@
     <string>Dark</string>
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <false/>
-    <!-- Scene-based lifecycle required for CarPlay multi-window support -->
     <key>UIApplicationSceneManifest</key>
     <dict>
       <key>UIApplicationSupportsMultipleScenes</key>
       <true/>
       <key>UISceneConfigurations</key>
       <dict>
-        <!-- Phone window scene -->
         <key>UIWindowSceneSessionRoleApplication</key>
         <array>
           <dict>
@@ -102,18 +100,6 @@
             <string>UIWindowScene</string>
             <key>UISceneDelegateClassName</key>
             <string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
-          </dict>
-        </array>
-        <!-- CarPlay window scene -->
-        <key>CPTemplateApplicationSceneSessionRoleApplication</key>
-        <array>
-          <dict>
-            <key>UISceneConfigurationName</key>
-            <string>CarPlay Configuration</string>
-            <key>UISceneClassName</key>
-            <string>CPTemplateApplicationScene</string>
-            <key>UISceneDelegateClassName</key>
-            <string>$(PRODUCT_MODULE_NAME).CarSceneDelegate</string>
           </dict>
         </array>
       </dict>

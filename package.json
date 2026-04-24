@@ -12,8 +12,7 @@
     "update": "./scripts/run-latest.sh"
   },
   "dependencies": {
-    "@g4rb4g3/react-native-carplay": "^2.7.22",
-    "@react-native-async-storage/async-storage": "^2.2.0",
+"@react-native-async-storage/async-storage": "^2.2.0",
     "@react-native-firebase/app": "^24.0.0",
     "@react-native-firebase/auth": "^24.0.0",
     "buffer": "^6.0.3",
