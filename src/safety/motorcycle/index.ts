@@ -22,7 +22,14 @@ import {
 } from '../types';
 import { SafetyDatabase, KVStore, InMemoryKV } from '../SafetyDatabase';
 import { useSafetyStore } from '../SafetyStore';
-import { MotoConfig, DEFAULT_MOTO_CONFIG, DEFAULT_SCOOTER_CONFIG, MotoSafetyEvent } from './types';
+import {
+  MotoConfig,
+  DEFAULT_MOTO_CONFIG,
+  DEFAULT_ELECTRIC_MOTO_CONFIG,
+  DEFAULT_SCOOTER_CONFIG,
+  DEFAULT_ELECTRIC_SCOOTER_CONFIG,
+  MotoSafetyEvent,
+} from './types';
 import { MotoTripManager } from './MotoTripManager';
 import { MotoScorer } from './MotoScorer';
 
@@ -33,6 +40,16 @@ export { MotoCrashReporter } from './MotoCrashReporter';
 export { MotoScorer } from './MotoScorer';
 export { MotoTripManager } from './MotoTripManager';
 export type { MotoTripSnapshot, MotoTripEndedHandler } from './MotoTripManager';
+export { GPSKalmanFilter } from './GPSKalmanFilter';
+export type { KalmanGPSState } from './GPSKalmanFilter';
+export { PhonePositionClassifier } from './PhonePositionClassifier';
+export { RiderContextProvider, bucketTimeOfDay } from './RiderContextProvider';
+export { SwerveDetector } from './SwerveDetector';
+export type { SwerveEvent } from './SwerveDetector';
+export { RoadObstacleFilter } from './RoadObstacleFilter';
+export type { ObstacleKind, ObstacleFilterVerdict } from './RoadObstacleFilter';
+export { RiderEventDetector } from './RiderEventDetector';
+export type { RiderFeatureAggregates } from './RiderEventDetector';
 
 export class MotoSafetyEngine {
   private tm: MotoTripManager;
@@ -80,7 +97,13 @@ export class MotoSafetyEngine {
   ): Promise<MotoSafetyEngine> {
     const db = new SafetyDatabase(kv);
     const base = await db.loadConfig();
-    const defaultCfg = overrides.subtype === 'scooter' ? DEFAULT_SCOOTER_CONFIG : DEFAULT_MOTO_CONFIG;
+    const isScooter = overrides.subtype === 'scooter';
+    const isElectric = overrides.powertrain === 'electric';
+    const defaultCfg =
+      isScooter && isElectric ? DEFAULT_ELECTRIC_SCOOTER_CONFIG :
+      isScooter               ? DEFAULT_SCOOTER_CONFIG          :
+      isElectric              ? DEFAULT_ELECTRIC_MOTO_CONFIG    :
+                                DEFAULT_MOTO_CONFIG;
     const cfg: MotoConfig = { ...defaultCfg, ...base, ...overrides };
     const engine = new MotoSafetyEngine(cfg, db, kv);
     const trips = await db.loadAllTrips(50);
@@ -103,6 +126,22 @@ export class MotoSafetyEngine {
   }
 
   getConfig(): MotoConfig { return { ...this.cfg }; }
+
+  // ---------- Delivery-rider context injection ----------
+
+  /** Push the current Mappls 2W ambient-flow speed for the rider's segment. */
+  setAmbient2WSpeedKmH(kmH: number): void { this.tm.setAmbient2WSpeedKmH(kmH); }
+  /** Push the OSM road class for the current segment. */
+  setRoadClass(rc: import('./types').RoadClass): void { this.tm.setRoadClass(rc); }
+  /** Push the known speed limit (OSM maxspeed or zone beacon) for the segment. */
+  setSpeedLimitKmH(kmH: number): void { this.tm.setSpeedLimitKmH(kmH); }
+
+  /** Report a touch event (if you wire the RN touch layer into the engine). */
+  reportTouchEvent(): void { this.tm.reportTouchEvent(); }
+  /** Report the device charging state. */
+  reportCharging(isCharging: boolean): void { this.tm.reportCharging(isCharging); }
+  /** Report voice-call state transitions (iOS CTCallState / Android TelephonyManager). */
+  setCallActive(active: boolean, t: number = Date.now()): void { this.tm.setCallActive(active, t); }
 
   bindOBDSpeed(subscribe: (cb: (speedKmH: number, t?: number) => void) => () => void): void {
     this.unsubscribers.push(subscribe((kmh, t) => this.tm.ingestOBDSpeed(kmh, t ?? Date.now())));

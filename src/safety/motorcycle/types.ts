@@ -125,6 +125,13 @@ import { SafetyConfig, DEFAULT_SAFETY_CONFIG } from '../types';
 
 export type MotoSubtype = 'motorcycle' | 'scooter';
 
+/**
+ * Fuel/powertrain profile. Matters because electric 2Ws accelerate harder
+ * than ICE for the same rider input — we raise the acceleration thresholds
+ * accordingly to match the delivery-rider safety spec.
+ */
+export type PowertrainType = 'ice' | 'electric';
+
 /** Events that only exist for 2-wheelers. */
 export type MotoEventType =
   | 'extreme_lean'         // centripetal > ~50° lean equivalent
@@ -144,7 +151,45 @@ export type MotoSafetyEventType =
   | 'overspeeding'
   | 'distracted_driving'
   | 'drowsy_driving'
-  | 'crash';
+  | 'crash'
+  | 'swerving'
+  | 'phone_use'
+  | 'panic_brake';         // severe brake with sub-second stop from > 20 km/h
+
+/**
+ * Phone position states classified by the phone-position classifier.
+ * Downstream detectors gate on this — events from low-confidence
+ * "held" classifications are suppressed to reduce false positives.
+ */
+export type PhonePositionState = 'mounted' | 'held' | 'pocket' | 'bag' | 'unknown';
+
+/**
+ * Overspeed risk band. Calculated from ratio of current speed to the
+ * reference speed (ambient 2W traffic flow + legal limit fallback).
+ *
+ * The bands exist because a linear "excess km/h" penalty systematically
+ * underweights the regime where real crash energy scales as v². We bucket
+ * the band and then apply a quadratic (ratio - 1)² term inside the scorer.
+ */
+export type OverspeedBand = 'ok' | 'caution' | 'event' | 'severe';
+
+/** Time-of-day bucket. Drives the severity multiplier applied to events. */
+export type TimeOfDayBucket = 'day' | 'dusk' | 'night';
+
+/**
+ * Generic Indian road-class default table, used when live map lookup
+ * (OSM / Mappls) is unavailable. A proper production deployment will
+ * replace this with a reverse-geocoded value for every ~100 m segment.
+ */
+export type RoadClass =
+  | 'residential'
+  | 'service'
+  | 'tertiary'
+  | 'secondary'
+  | 'primary'
+  | 'trunk_urban'
+  | 'trunk_rural'
+  | 'motorway';
 
 export interface MotoConfig extends SafetyConfig {
   subtype: MotoSubtype;
@@ -214,6 +259,155 @@ export interface MotoConfig extends SafetyConfig {
    */
   rainThresholdFactor: number;            // default 0.70
   snowThresholdFactor: number;            // default 0.55
+
+  // ================================================================
+  //  Delivery-rider extensions (from 2W safety analytics spec)
+  // ================================================================
+
+  /**
+   * Powertrain profile. Used to choose between ICE and electric accel
+   * thresholds. Electric 2Ws produce peak torque from zero RPM and can
+   * sustain 0.5 g forward accel from a standstill — calling that a
+   * "hard_acceleration" event on every traffic-light green is false-
+   * positive suicide. Electric threshold is raised to match.
+   */
+  powertrain: PowertrainType;             // default 'ice'
+
+  /**
+   * Forward-accel thresholds in m/s² (not g). These replace
+   * hardAccelThreshold when delivery scoring is enabled.
+   *
+   * ICE (default): caution 0.40 g, event 0.55 g, severe 0.70 g
+   * Electric:       caution 0.50 g, event 0.65 g, severe 0.80 g
+   */
+  accelCautionMs2: number;                // ICE 3.92, EV 4.90
+  accelEventMs2: number;                  // ICE 5.39, EV 6.38
+  accelSevereMs2: number;                 // ICE 6.87, EV 7.85
+
+  /** Min duration (s) for an accel event in caution/event band. */
+  accelMinDurationS: number;              // default 1.0
+  /** Min duration (s) for an accel event in the severe band. */
+  accelSevereMinDurationS: number;        // default 0.5
+
+  /**
+   * Jerk spike threshold (g/s). The spec logs jerk-spike counts at |jerk|
+   * > 2.0 g/s; this threshold multiplied by 9.81 gives the m/s³ value.
+   */
+  jerkSpikeThresholdMs3: number;          // default 19.62 (≈ 2.0 g/s)
+
+  /**
+   * Minimum acceleration-reversal rate (per minute) considered normal
+   * urban riding. Above this, we contribute to the trip's aggressive-
+   * pattern score. 3/min is normal; 6/min is "twist and brake" impatient.
+   */
+  accelReversalsPerMinBase: number;       // default 3
+
+  /**
+   * Braking thresholds in m/s² (POSITIVE values — we compare against
+   * |decel|). ICE and electric use the same braking thresholds.
+   *   caution 0.40 g, event 0.55 g, severe 0.70 g
+   */
+  brakeCautionMs2: number;                // default 3.92
+  brakeEventMs2: number;                  // default 5.39
+  brakeSevereMs2: number;                 // default 6.87
+
+  /** Min duration (s) for a caution/event brake; severe uses half. */
+  brakeMinDurationS: number;              // default 0.5
+  brakeSevereMinDurationS: number;        // default 0.3
+
+  /**
+   * Panic brake detection — a severe brake with the signature of
+   * near-emergency stop from city speed.
+   */
+  panicPreBrakeSpeedKmH: number;          // default 20
+  panicMaxTime20To0S: number;             // default 1.2
+  panicMinOnsetJerkMs3: number;           // default 19.62 (2.0 g/s)
+
+  // ---- False-positive filters (speed breaker / pothole / normal stop) ----
+
+  /**
+   * Vertical-accel peak magnitude (m/s²) above which we consider a
+   * speed-breaker signature. 0.5 g = 4.9 m/s². A gentle Indian hump
+   * produces 0.4–0.6 g; a sharp one can exceed 1.0 g.
+   */
+  speedBreakerVertPeakMs2: number;        // default 4.9
+
+  /** Max forward-decel duration (s) still consistent with a speed breaker. */
+  speedBreakerMaxDecelDurationS: number;  // default 0.5
+  /** Max forward-decel peak (m/s²) for a crossing to be classified as breaker. */
+  speedBreakerMaxDecelMs2: number;        // default 3.92
+
+  /** Pothole: large vertical spike + lateral swerve + very short decel. */
+  potholeVertPeakMs2: number;             // default 5.88 (0.6 g)
+  potholeLatPeakMs2: number;              // default 2.94 (0.3 g)
+  potholeMaxDecelDurationS: number;       // default 0.4
+
+  /**
+   * Normal-stop: gradual decel ramp that goes to zero. If the peak decel
+   * stays below this and the vehicle ends up stopped, it's treated as a
+   * controlled (red light) stop and not flagged.
+   */
+  normalStopPeakMs2: number;              // default 3.43 (0.35 g)
+  normalStopEndSpeedKmH: number;          // default 1.0
+
+  // ---- Swerve detection ----
+
+  /**
+   * A swerve is detected when the phone sees a lateral impulse but the
+   * GPS heading barely changes — "the bike moved sideways but kept
+   * pointing forward". Classic obstacle dodge / lane splitting pattern.
+   */
+  swerveLatImpulseMs2: number;            // default 3.43 (0.35 g)
+  swerveMaxHeadingChangeDeg: number;      // default 20
+  swerveWindowMs: number;                 // default 2000
+
+  /**
+   * Phone-position gate: downstream detectors drop events whose phone
+   * position confidence is below this. 0.7 matches the spec default.
+   */
+  phonePositionMinConfidence: number;     // default 0.7
+
+  // ---- Phone-use events ----
+
+  /** Min speed (km/h) below which phone-use events are not flagged. */
+  phoneUseMinSpeedKmH: number;            // default 15
+  /** Min duration (s) of handheld / distraction before it becomes an event. */
+  phoneUseMinDurationS: number;           // default 3
+  /** Speed (km/h) above which an active voice call becomes an event. */
+  phoneUseCallMinSpeedKmH: number;        // default 20
+  /** Min duration (s) of an active voice call before flagging. */
+  phoneUseCallMinDurationS: number;       // default 10
+  /** Touches/s above which we infer a texting signature. */
+  phoneUseTouchesPerSec: number;          // default 1.5
+
+  // ---- Time-of-day weighting ----
+
+  /**
+   * Multiplicative weights applied to event *severity scores*. The spec
+   * is explicit that we do NOT scale thresholds by time of day — we
+   * scale the consequence. A hard brake at 22:00 carries more risk than
+   * the same brake at 10:00 because ambient crash rate is ~2–3× higher.
+   */
+  todDayWeight: number;                   // default 1.0
+  todDuskWeight: number;                  // default 1.2
+  todNightWeight: number;                 // default 1.4
+
+  // ---- GPS Kalman / noise gating ----
+
+  /** GPS samples with reported accuracy > this are dropped for speed. */
+  gpsMaxAccuracyM: number;                // default 20
+  /** Number of seconds to discard at the start of a trip (GPS settling). */
+  gpsSettlingSeconds: number;             // default 5
+  /** Kalman process-noise proxy (m²/s³). Higher = trust measurements more. */
+  gpsKalmanProcessNoise: number;          // default 1.5
+
+  /**
+   * Enable the full delivery-rider pipeline (context-aware overspeed,
+   * banded scoring, FP filters, swerve detection, phone-position gate,
+   * time-of-day weighting). When false the engine reverts to the
+   * v1 motorcycle detectors.
+   */
+  deliveryRiderMode: boolean;             // default true
 }
 
 export const DEFAULT_MOTO_CONFIG: MotoConfig = {
@@ -272,6 +466,70 @@ export const DEFAULT_MOTO_CONFIG: MotoConfig = {
   extremeLeanThresholdDeg: 50,
   rainThresholdFactor: 0.70,
   snowThresholdFactor: 0.55,
+
+  // Delivery-rider defaults (ICE). Electric overrides in DEFAULT_ELECTRIC_MOTO_CONFIG.
+  powertrain: 'ice',
+  accelCautionMs2: 3.92,      // 0.40 g
+  accelEventMs2: 5.39,        // 0.55 g
+  accelSevereMs2: 6.87,       // 0.70 g
+  accelMinDurationS: 1.0,
+  accelSevereMinDurationS: 0.5,
+  jerkSpikeThresholdMs3: 19.62, // 2.0 g/s
+  accelReversalsPerMinBase: 3,
+
+  brakeCautionMs2: 3.92,
+  brakeEventMs2: 5.39,
+  brakeSevereMs2: 6.87,
+  brakeMinDurationS: 0.5,
+  brakeSevereMinDurationS: 0.3,
+
+  panicPreBrakeSpeedKmH: 20,
+  panicMaxTime20To0S: 1.2,
+  panicMinOnsetJerkMs3: 19.62,
+
+  speedBreakerVertPeakMs2: 4.9,
+  speedBreakerMaxDecelDurationS: 0.5,
+  speedBreakerMaxDecelMs2: 3.92,
+  potholeVertPeakMs2: 5.88,
+  potholeLatPeakMs2: 2.94,
+  potholeMaxDecelDurationS: 0.4,
+  normalStopPeakMs2: 3.43,
+  normalStopEndSpeedKmH: 1.0,
+
+  swerveLatImpulseMs2: 3.43,
+  swerveMaxHeadingChangeDeg: 20,
+  swerveWindowMs: 2000,
+
+  phonePositionMinConfidence: 0.7,
+
+  phoneUseMinSpeedKmH: 15,
+  phoneUseMinDurationS: 3,
+  phoneUseCallMinSpeedKmH: 20,
+  phoneUseCallMinDurationS: 10,
+  phoneUseTouchesPerSec: 1.5,
+
+  todDayWeight: 1.0,
+  todDuskWeight: 1.2,
+  todNightWeight: 1.4,
+
+  gpsMaxAccuracyM: 20,
+  gpsSettlingSeconds: 5,
+  gpsKalmanProcessNoise: 1.5,
+
+  deliveryRiderMode: true,
+};
+
+/**
+ * Electric 2W profile — raises the acceleration thresholds so clean EV
+ * launches don't count as hard-acceleration events. Braking thresholds
+ * remain identical (physics is the same on the decel side).
+ */
+export const DEFAULT_ELECTRIC_MOTO_CONFIG: MotoConfig = {
+  ...DEFAULT_MOTO_CONFIG,
+  powertrain: 'electric',
+  accelCautionMs2: 4.90, // 0.50 g
+  accelEventMs2:   6.38, // 0.65 g
+  accelSevereMs2:  7.85, // 0.80 g
 };
 
 export const DEFAULT_SCOOTER_CONFIG: MotoConfig = {
@@ -292,6 +550,22 @@ export const DEFAULT_SCOOTER_CONFIG: MotoConfig = {
   vehicleRedlineRPM: 8000,
   rainThresholdFactor: 0.75,
   snowThresholdFactor: 0.60,
+
+  // Scooters are almost always electric in the last-mile delivery fleet;
+  // we keep ICE as the explicit default but the accel thresholds here
+  // assume moderate scooter capability.
+  accelCautionMs2: 2.94,       // 0.30 g
+  accelEventMs2:   4.41,       // 0.45 g
+  accelSevereMs2:  5.88,       // 0.60 g
+};
+
+/** Scooter running on electric powertrain — e-scooter delivery fleet default. */
+export const DEFAULT_ELECTRIC_SCOOTER_CONFIG: MotoConfig = {
+  ...DEFAULT_SCOOTER_CONFIG,
+  powertrain: 'electric',
+  accelCautionMs2: 3.92,       // 0.40 g
+  accelEventMs2:   5.39,       // 0.55 g
+  accelSevereMs2:  6.87,       // 0.70 g
 };
 
 /** A safety event with the extended moto event type union. */
@@ -311,4 +585,60 @@ export interface LeanState {
   angleDeg: number;       // positive = right, negative = left
   centripetal: number;    // m/s² — what produced this lean estimate
   source: 'gps' | 'imu'; // which estimator is active
+}
+
+/**
+ * Live phone-position snapshot. Emitted at ~1 Hz by the classifier.
+ * Downstream event detectors read this to gate what they flag.
+ */
+export interface PhonePositionSnapshot {
+  state: PhonePositionState;
+  /** Confidence in [0, 1]. */
+  confidence: number;
+  /** ms since epoch of the last successful classification. */
+  updatedAt: number;
+}
+
+/**
+ * Live rider context snapshot. Populated from GPS position + time. In
+ * production the ambient_2w_speed is a Mappls API lookup; in v1 we only
+ * have the static fallback from the road-class heuristic.
+ */
+export interface RiderContext {
+  /** Estimated reference 2W flow speed in km/h for the current segment. */
+  ambient2wSpeedKmH: number;
+  /** Effective legal speed limit for the current segment, km/h. */
+  speedLimitKmH: number;
+  /** Heuristic-inferred road class. */
+  roadClass: RoadClass;
+  /** Current time-of-day bucket. */
+  timeOfDay: TimeOfDayBucket;
+  /** Multiplier applied to event severity scores. */
+  timeOfDayWeight: number;
+  /** True if the context is a best-effort static fallback rather than live. */
+  isFallback: boolean;
+}
+
+/**
+ * Per-trip aggregate features emitted by the new detectors. These are
+ * surfaced in MotoTripSnapshot so the UI and the backend data contract
+ * can display them directly without recomputing from the event stream.
+ */
+export interface RiderTripFeatures {
+  jerkSpikeCount: number;
+  accelReversalsPerMinute: number;
+  coastRatio: number;
+  phoneUsageRatio: number;
+  mountedPct: number;
+  heldPct: number;
+  pocketPct: number;
+  bagPct: number;
+  unknownPct: number;
+  speedBreakersDetected: number;
+  potholesDetected: number;
+  normalStopsDetected: number;
+  panicStopCount: number;
+  swerveCount: number;
+  /** Maximum Kalman-smoothed speed seen during the trip, km/h. */
+  peakSpeedKmH: number;
 }
