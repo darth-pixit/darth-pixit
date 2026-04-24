@@ -334,7 +334,7 @@ export class TripManager {
   ingestAccelerometer(sample: AccelerometerSample): void {
     if (this.status !== 'active') return;
     const linearMag = this.fusion.ingestAccelerometer(sample);
-    this.crash.ingestAccel(sample, linearMag);
+    this.crash.ingestAccel(sample, this.fusion.getLastLinear(), linearMag);
   }
 
   ingestGyroscope(sample: GyroscopeSample): void {

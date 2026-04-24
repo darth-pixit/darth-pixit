@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   StatusBar,
   SafeAreaView,
 } from 'react-native';
+import { useShallow } from 'zustand/react/shallow';
 import { useOBDStore } from '../obd/OBDStore';
 import { OBDData, SeatbeltStatus } from '../obd/OBDManager';
 
@@ -349,8 +350,29 @@ function buildSections(d: OBDData): VitalSection[] {
 }
 
 export function VitalsScreen({ visible, onClose }: VitalsScreenProps) {
-  const data = useOBDStore();
-  const sections = buildSections(data);
+  // useShallow prevents re-renders when the store creates a new reference but
+  // the actual field values haven't changed (OBD polls many times per second).
+  const data = useOBDStore(useShallow((s): OBDData => ({
+    state: s.state, adapterName: s.adapterName,
+    rpm: s.rpm, speedKmH: s.speedKmH, mafGPerS: s.mafGPerS,
+    mapKPa: s.mapKPa, iatC: s.iatC, engineLoadPct: s.engineLoadPct,
+    coolantC: s.coolantC, fuelRateLPerH: s.fuelRateLPerH,
+    fuelCalcMethod: s.fuelCalcMethod, seatbeltStatus: s.seatbeltStatus,
+    tpmsFLKpa: s.tpmsFLKpa, tpmsFRKpa: s.tpmsFRKpa,
+    tpmsRLKpa: s.tpmsRLKpa, tpmsRRKpa: s.tpmsRRKpa,
+    milOn: s.milOn, dtcCount: s.dtcCount,
+    fuelLevelPct: s.fuelLevelPct, oilTempC: s.oilTempC,
+    batteryVolts: s.batteryVolts, throttlePosPct: s.throttlePosPct,
+    fuelPressureKPa: s.fuelPressureKPa, ambientTempC: s.ambientTempC,
+    absoluteLoadPct: s.absoluteLoadPct,
+    shortFuelTrim1Pct: s.shortFuelTrim1Pct, longFuelTrim1Pct: s.longFuelTrim1Pct,
+    timingAdvanceDeg: s.timingAdvanceDeg, baroPressureKPa: s.baroPressureKPa,
+    engineRunTimeSec: s.engineRunTimeSec, distanceMilOnKm: s.distanceMilOnKm,
+    distanceSinceClearedKm: s.distanceSinceClearedKm,
+    timeMilOnMin: s.timeMilOnMin, timeSinceClearedMin: s.timeSinceClearedMin,
+    errorMsg: s.errorMsg, debugLog: s.debugLog,
+  })));
+  const sections = useMemo(() => buildSections(data), [data]);
   const isLive = data.state === 'ready';
 
   return (

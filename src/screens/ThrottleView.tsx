@@ -122,6 +122,10 @@ export function ThrottleView() {
   const { engineLoadPct, rpm, state, fuelRateLPerH, speedKmH, start, stop } = useOBDStore();
   const { signOut } = useAuth();
   const { autoConnectState, completeSetup } = useAutoConnect(DEFAULT_VEHICLE);
+
+  // Stop BLE polling when this screen unmounts (sign-out, app termination).
+  // Without this the OBD poll loop keeps running after the user signs out.
+  useEffect(() => () => { stop(); }, [stop]);
   const [isDemoMode, setIsDemoMode] = useState(false);
   const [demoThrottle, setDemoThrottle] = useState(0);
   const [tripAvgKmL, setTripAvgKmL] = useState<number | null>(null);
