@@ -156,21 +156,6 @@ export function ThrottleView() {
   const binDistRef = useRef<number[]>(Array(BIN_COUNT).fill(0));
   const [binAvgs, setBinAvgs] = useState<(number | null)[]>(Array(BIN_COUNT).fill(null));
 
-  // Live instantaneous km/L — derived directly from store values so it updates
-  // every time new OBD data arrives, not just every 500ms like the trip average.
-  const liveKmL = useMemo(() => {
-    if (!hasLiveData) return null;
-    if (isDemoMode) {
-      const fr = 0.8 + demoThrottle * 9;
-      const sp = 20 + demoThrottle * 60;
-      return fr > 0.1 && sp > 0.5 ? sp / fr : null;
-    }
-    if (fuelRateLPerH != null && speedKmH != null && fuelRateLPerH > 0.1 && speedKmH > 0.5) {
-      return speedKmH / fuelRateLPerH;
-    }
-    return null;
-  }, [hasLiveData, isDemoMode, demoThrottle, fuelRateLPerH, speedKmH]);
-
   // Demo mode: animated sine-wave throttle simulation
   useEffect(() => {
     if (!isDemoMode) return;
@@ -185,6 +170,21 @@ export function ThrottleView() {
   }, [isDemoMode]);
 
   const hasLiveData = isDemoMode || state === 'ready';
+
+  // Live instantaneous km/L — derived directly from store values so it updates
+  // on every OBD data event. Declared after hasLiveData to avoid TDZ.
+  const liveKmL = useMemo(() => {
+    if (!hasLiveData) return null;
+    if (isDemoMode) {
+      const fr = 0.8 + demoThrottle * 9;
+      const sp = 20 + demoThrottle * 60;
+      return fr > 0.1 && sp > 0.5 ? sp / fr : null;
+    }
+    if (fuelRateLPerH != null && speedKmH != null && fuelRateLPerH > 0.1 && speedKmH > 0.5) {
+      return speedKmH / fuelRateLPerH;
+    }
+    return null;
+  }, [hasLiveData, isDemoMode, demoThrottle, fuelRateLPerH, speedKmH]);
 
   // Reset trip accumulators when the session ends OR when demo mode is toggled.
   // Without the isDemoMode reset, switching modes while OBD is live pollutes
@@ -349,9 +349,12 @@ export function ThrottleView() {
     );
   }
 
-  // Show nothing while the AsyncStorage check is in-flight (~1 frame)
   if (autoConnectState.phase === 'loading') {
-    return <SafeAreaView style={styles.safe} />;
+    return (
+      <SafeAreaView style={styles.safe}>
+        <ActivityIndicator size="large" color="#22C55E" style={styles.loadingSpinner} />
+      </SafeAreaView>
+    );
   }
 
   return (
@@ -534,6 +537,9 @@ const styles = StyleSheet.create({
   safe: {
     flex: 1,
     backgroundColor: '#0D0D0D',
+  },
+  loadingSpinner: {
+    flex: 1,
   },
   body: {
     flex: 1,
