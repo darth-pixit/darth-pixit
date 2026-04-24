@@ -674,16 +674,18 @@ export class OBDManager {
   private async pollLoop() {
     while (this.polling) {
       try {
+        // Emit after every high-priority PID so the UI updates as each value
+        // arrives rather than waiting for a full round of 4 PIDs to complete.
         for (const pid of HIGH_PIDS) {
           const raw = await this.send(pid, 1000);
           this.applyPID(pid, raw);
+          this.computeFuelRate();
+          this.emitCurrent();
         }
         const lowPid = LOW_PIDS[this.lowPidIndex % LOW_PIDS.length];
         const raw = await this.send(lowPid, 1000);
         this.applyPID(lowPid, raw);
         this.lowPidIndex++;
-
-        this.computeFuelRate();
         this.emitCurrent();
       } catch (e: any) {
         // A BLE-level error (device disconnected, etc.) should trigger reconnect
@@ -707,8 +709,7 @@ export class OBDManager {
           }
         }
       }
-
-      await sleep(50);
+      // No artificial sleep — BLE round-trip time is the natural rate limiter.
     }
   }
 
