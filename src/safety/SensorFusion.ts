@@ -66,6 +66,8 @@ export class SensorFusion {
   private headingHistory: Array<{ t: number; h: number }> = [];
   private readonly HEADING_HISTORY_MS = 2000;
 
+  private lastLinear: Vec3 = { x: 0, y: 0, z: 0 };
+
   ingestAccelerometer(s: AccelerometerSample): number {
     if (!this.gravityInitialized) {
       this.gravity = { ...s.accel };
@@ -79,8 +81,14 @@ export class SensorFusion {
     const lx = s.accel.x - this.gravity.x;
     const ly = s.accel.y - this.gravity.y;
     const lz = s.accel.z - this.gravity.z;
+    this.lastLinear = { x: lx, y: ly, z: lz };
     this.lastLinearMag = Math.sqrt(lx * lx + ly * ly + lz * lz);
     return this.lastLinearMag;
+  }
+
+  /** Last gravity-removed accel vector (m/s²). Crash detector uses per-axis values. */
+  getLastLinear(): Vec3 {
+    return { ...this.lastLinear };
   }
 
   /** Latest linear-accel magnitude. Crash detector taps this. */
@@ -199,6 +207,7 @@ export class SensorFusion {
   reset(): void {
     this.gravityInitialized = false;
     this.gravity = { x: 0, y: 0, z: 9.81 };
+    this.lastLinear = { x: 0, y: 0, z: 0 };
     this.lastLinearMag = 0;
     this.speedHistory = [];
     this.headingHistory = [];

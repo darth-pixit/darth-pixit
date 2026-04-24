@@ -38,7 +38,7 @@
  *   for storage/transmission (~200 pre + 200 post ≈ 10 KB).
  */
 
-import { AccelerometerSample, CrashReport, GPSPoint, SafetyConfig } from './types';
+import { AccelerometerSample, Vec3, CrashReport, GPSPoint, SafetyConfig } from './types';
 
 interface SensorRecord {
   t: number;
@@ -105,11 +105,17 @@ export class CrashReporter {
     this.cfg = { ...this.cfg, ...patch };
   }
 
-  /** Feed every accelerometer sample. Gravity should already be removed. */
-  ingestAccel(s: AccelerometerSample, linearMag: number): void {
-    const ax = Math.abs(s.accel.x);
-    const ay = Math.abs(s.accel.y);
-    const az = Math.abs(s.accel.z);
+  /**
+   * Feed every accelerometer sample.
+   * linear: gravity-removed accel vector (m/s²) from SensorFusion.
+   * linearMag: pre-computed magnitude of linear.
+   * The per-axis check uses `linear`, NOT s.accel — raw accel includes ~9.81 m/s²
+   * of gravity on one axis which would corrupt the multi-axis discrimination.
+   */
+  ingestAccel(s: AccelerometerSample, linear: Vec3, linearMag: number): void {
+    const ax = Math.abs(linear.x);
+    const ay = Math.abs(linear.y);
+    const az = Math.abs(linear.z);
     const sorted = [ax, ay, az].sort((a, b) => b - a);
     const rec: SensorRecord = {
       t: s.t,

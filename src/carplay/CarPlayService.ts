@@ -36,7 +36,7 @@ function fmtNum(n: number | null, decimals: number, unit: string): string {
 
 function adapterLine(state: string, method: string): string {
   switch (state) {
-    case 'ready':        return `Connected (${method})`;
+    case 'ready':        return method === 'none' ? 'Connected' : `Connected (${method})`;
     case 'scanning':     return 'Scanning…';
     case 'connecting':   return 'Connecting…';
     case 'reconnecting': return 'Reconnecting…';
