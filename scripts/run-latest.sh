@@ -10,7 +10,18 @@ cd "$REPO_ROOT"
 echo "==> Pulling latest main…"
 git fetch origin main
 git checkout main
+# Stash any local changes (e.g. package-lock.json tweaks) so the merge can proceed,
+# then restore them afterwards.
+STASH_OUTPUT=$(git stash --include-untracked 2>&1)
+if echo "$STASH_OUTPUT" | grep -q "No local changes"; then
+  STASHED=0
+else
+  STASHED=1
+fi
 git merge --ff-only origin/main
+if [ "$STASHED" -eq 1 ]; then
+  git stash pop || true
+fi
 
 # Reinstall JS deps only if package.json changed since last install.
 if [ ! -d node_modules ] || [ package.json -nt node_modules/.package-install-stamp ]; then
