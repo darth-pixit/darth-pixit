@@ -53,9 +53,18 @@ export function useAutoConnect(vehicle: VehicleCfg): {
 
   useEffect(() => {
     if (autoConnectState.phase !== 'loading') return;
+    // Safety net: if the eager AsyncStorage read hasn't resolved by the time this
+    // effect fires (e.g. bridge busy on first launch), resolve it ourselves.
+    // The 3 s timeout ensures the loading screen never hangs indefinitely — it
+    // falls back to needs_setup so the user sees UI rather than a black screen.
+    const timer = setTimeout(() => {
+      setAutoConnectState({ phase: 'needs_setup' });
+    }, 3000);
     eagerRead.then((val) => {
+      clearTimeout(timer);
       setAutoConnectState(val === 'true' ? { phase: 'ready' } : { phase: 'needs_setup' });
     });
+    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {
