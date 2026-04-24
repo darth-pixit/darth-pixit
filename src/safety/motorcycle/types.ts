@@ -154,7 +154,8 @@ export type MotoSafetyEventType =
   | 'crash'
   | 'swerving'
   | 'phone_use'
-  | 'panic_brake';         // severe brake with sub-second stop from > 20 km/h
+  | 'panic_brake'          // severe brake with sub-second stop from > 20 km/h
+  | 'brake_during_lean';   // trail-braking: decel > 0.3 g while lean > 20°
 
 /**
  * Phone position states classified by the phone-position classifier.
@@ -408,6 +409,59 @@ export interface MotoConfig extends SafetyConfig {
    * v1 motorcycle detectors.
    */
   deliveryRiderMode: boolean;             // default true
+
+  // ---- Trip stitching (spec §2.4) ----
+
+  /** Speed (km/h) below which the rider counts as paused. */
+  tripIdleSpeedKmH: number;               // default 2
+  /** Auto-end trip after this many continuous seconds below the idle speed. */
+  tripIdleEndSeconds: number;             // default 300 (5 min)
+  /** Flag trips below this distance (m) as non-scorable. */
+  tripMinDistanceM: number;               // default 500
+  /** Flag trips shorter than this (seconds) as non-scorable. */
+  tripMinDurationS: number;               // default 120
+
+  // ---- GPS-vs-IMU cross-check (spec §4.2) ----
+
+  /**
+   * Tolerated relative disagreement between IMU-derived forward accel and
+   * GPS-derived accel. When the two disagree by more than this fraction
+   * we mark the accel event with `gpsCrossCheckFailed=true`; the scorer
+   * halves its penalty. We never suppress outright — an IMU-confirmed
+   * event with GPS disagreement is still informative, just less trusted.
+   */
+  accelGpsCrossCheckTolerance: number;    // default 0.30
+
+  // ---- Trail-braking / U-turn / phone-mount shift ----
+
+  /** Lean angle (deg) above which simultaneous braking counts as trail-braking. */
+  trailBrakingMinLeanDeg: number;         // default 20
+  /** |decel| (m/s²) above which trail-braking fires when combined with lean. */
+  trailBrakingMinDecelMs2: number;        // default 2.94 (0.3 g)
+
+  /** Speed (km/h) below which a sharp heading change is treated as a U-turn. */
+  uTurnMaxSpeedKmH: number;               // default 10
+  /** Heading change (deg) over 3 s at low speed that counts as a U-turn. */
+  uTurnMinHeadingChangeDeg: number;       // default 150
+
+  /**
+   * When IMU-derived lean disagrees with GPS-derived expected lean by more
+   * than this (deg) for `mountShiftMinDurationS` seconds, phone-position
+   * confidence is floored to 0.5 — the mount has probably shifted.
+   */
+  mountShiftMaxDiffDeg: number;           // default 15
+  mountShiftMinDurationS: number;         // default 3
+
+  // ---- Phone use / distraction ----
+
+  /**
+   * Whitelisted foreground app IDs for distraction detection. When the
+   * foreground app is NOT in this set AND screen-on while moving fast,
+   * we emit a phone_use event with subtype=distraction. Typically holds
+   * the delivery app's own bundle/package ID so navigation + OTP + pickup
+   * confirm don't penalise.
+   */
+  deliveryAppIds: string[];               // default []
 }
 
 export const DEFAULT_MOTO_CONFIG: MotoConfig = {
@@ -517,6 +571,24 @@ export const DEFAULT_MOTO_CONFIG: MotoConfig = {
   gpsKalmanProcessNoise: 1.5,
 
   deliveryRiderMode: true,
+
+  tripIdleSpeedKmH: 2,
+  tripIdleEndSeconds: 300,
+  tripMinDistanceM: 500,
+  tripMinDurationS: 120,
+
+  accelGpsCrossCheckTolerance: 0.30,
+
+  trailBrakingMinLeanDeg: 20,
+  trailBrakingMinDecelMs2: 2.94,
+
+  uTurnMaxSpeedKmH: 10,
+  uTurnMinHeadingChangeDeg: 150,
+
+  mountShiftMaxDiffDeg: 15,
+  mountShiftMinDurationS: 3,
+
+  deliveryAppIds: [],
 };
 
 /**
@@ -641,4 +713,32 @@ export interface RiderTripFeatures {
   swerveCount: number;
   /** Maximum Kalman-smoothed speed seen during the trip, km/h. */
   peakSpeedKmH: number;
+
+  // ---- Spec §4.2 acceleration features ----
+
+  /** Best 0→30 km/h time observed during the trip (seconds). Null if not reached. */
+  zeroTo30TimeS: number | null;
+  /**
+   * Peak "energy gain rate" proxy during an accel event: speed_kmh × a_fwd_ms2.
+   * The spec expresses this as mass × speed × a_fwd; we omit mass so the
+   * metric is comparable across riders.
+   */
+  energyGainRate: number;
+  /**
+   * Aggressive-pattern score (trip-level, spec §4.2):
+   *   max(0, reversals_per_min - base) × (1 - coast_ratio) × duration_min.
+   */
+  aggressivePatternScore: number;
+
+  // ---- Spec §4.3 brake features ----
+
+  /** Mean pre-brake speed across all flagged brake events, km/h. */
+  preBrakeSpeedMeanKmH: number;
+  /** p95 of pre-brake speeds (km/h). */
+  preBrakeSpeedP95KmH: number;
+  /** Count of trail-braking events: decel + lean simultaneously. */
+  brakeDuringLeanCount: number;
+
+  /** Total moving seconds — denominator for per-shift exposure-normalised stats. */
+  movingSeconds: number;
 }

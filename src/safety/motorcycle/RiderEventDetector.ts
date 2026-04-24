@@ -48,7 +48,7 @@ import {
   PhonePositionSnapshot,
   RiderContext,
 } from './types';
-import { RoadObstacleFilter, ObstacleKind } from './RoadObstacleFilter';
+import { RoadObstacleFilter, ObstacleKind, SignalProximityGetter } from './RoadObstacleFilter';
 
 export type RiderEventListener = (ev: MotoSafetyEvent) => void;
 
@@ -72,6 +72,14 @@ export interface RiderFeatureAggregates {
   potholesDetected: number;
   normalStopsDetected: number;
   peakSpeedKmH: number;
+
+  // ---- Extended spec features (§4.2, §4.3) ----
+  zeroTo30TimeS: number | null;
+  energyGainRate: number;
+  aggressivePatternScore: number;
+  preBrakeSpeedMeanKmH: number;
+  preBrakeSpeedP95KmH: number;
+  brakeDuringLeanCount: number;
 }
 
 const DEBUG = false;
@@ -111,6 +119,25 @@ export class RiderEventDetector {
   private lastSpeedSamples: Array<{ t: number; kmH: number }> = [];
   private readonly PANIC_SPEED_HISTORY_MS = 3000;
 
+  // ---------- 0→30 and energy-gain tracking ----------
+  /** Starts timing when speed first crosses below 2 km/h; resets on stop. */
+  private zeroTo30StartT: number | null = null;
+  private bestZeroTo30S: number | null = null;
+  /** Peak of speed_kmh × |a_fwd_ms2| observed while accelerating. */
+  private peakEnergyGainRate = 0;
+
+  // ---------- Brake feature aggregation ----------
+  private preBrakeSpeeds: number[] = [];
+  private brakeDuringLeanCount = 0;
+
+  // ---------- Lean tracking (for trail-braking detection) ----------
+  private currentLeanAbsDeg = 0;
+
+  // ---------- GPS cross-check (spec §4.2) ----------
+  private lastGpsSpeedKmH: number | null = null;
+  private lastGpsSpeedT: number = 0;
+  private lastGpsDerivedAccel: number | null = null;
+
   // ---------- Event ID counter ----------
   private idCounter = 0;
 
@@ -119,12 +146,13 @@ export class RiderEventDetector {
     locationGetter: () => { lat: number; lng: number } | null,
     phonePosGetter: () => PhonePositionSnapshot,
     contextGetter: () => RiderContext,
+    signalProximityGetter: SignalProximityGetter | null = null,
   ) {
     this.cfg = cfg;
     this.locationGetter = locationGetter;
     this.phonePosGetter = phonePosGetter;
     this.contextGetter = contextGetter;
-    this.obstacleFilter = new RoadObstacleFilter(cfg);
+    this.obstacleFilter = new RoadObstacleFilter(cfg, signalProximityGetter);
   }
 
   setListener(l: RiderEventListener): void { this.listener = l; }
@@ -133,9 +161,35 @@ export class RiderEventDetector {
     this.obstacleFilter.updateConfig(patch);
   }
 
+  /** Wire a traffic-signal proximity getter (or detach with null). */
+  setSignalProximityGetter(g: SignalProximityGetter | null): void {
+    this.obstacleFilter.setSignalProximityGetter(g);
+  }
+
   /** Feed axis accel for obstacle-filter context. */
   ingestVerticalLateral(t: number, vertical: number, lateral: number): void {
     this.obstacleFilter.ingest(t, vertical, lateral);
+  }
+
+  /** Update the current lean angle so trail-braking logic can check it. */
+  updateLeanDeg(leanDeg: number): void {
+    this.currentLeanAbsDeg = Math.abs(leanDeg);
+  }
+
+  /**
+   * Feed GPS speed samples so the tick() loop can cross-check IMU accel
+   * against GPS-derived accel (spec §4.2, "GPS agrees within 30%").
+   */
+  ingestGPSSpeed(kmH: number, t: number): void {
+    if (this.lastGpsSpeedT > 0) {
+      const dt = (t - this.lastGpsSpeedT) / 1000;
+      if (dt > 0 && dt < 3) {
+        const dv = (kmH - (this.lastGpsSpeedKmH ?? kmH)) / 3.6;
+        this.lastGpsDerivedAccel = dv / dt;
+      }
+    }
+    this.lastGpsSpeedKmH = kmH;
+    this.lastGpsSpeedT = t;
   }
 
   /**
@@ -152,6 +206,23 @@ export class RiderEventDetector {
     const { longitudinal, speedKmH, t } = input;
 
     this.peakSpeedKmH = Math.max(this.peakSpeedKmH, speedKmH);
+
+    // ---- 0→30 time: start when speed drops to ~0, finish when it crosses 30 ----
+    if (speedKmH < 2) {
+      this.zeroTo30StartT = t;
+    } else if (this.zeroTo30StartT !== null && speedKmH >= 30) {
+      const elapsedS = (t - this.zeroTo30StartT) / 1000;
+      if (elapsedS > 0.5 && (this.bestZeroTo30S === null || elapsedS < this.bestZeroTo30S)) {
+        this.bestZeroTo30S = elapsedS;
+      }
+      this.zeroTo30StartT = null;
+    }
+
+    // ---- Energy gain rate proxy ----
+    if (longitudinal > 0) {
+      const rate = speedKmH * longitudinal;
+      if (rate > this.peakEnergyGainRate) this.peakEnergyGainRate = rate;
+    }
 
     // ---- Speed history for panic-brake signature ----
     this.lastSpeedSamples.push({ t, kmH: speedKmH });
@@ -217,6 +288,15 @@ export class RiderEventDetector {
     this.prevAccel = 0;
     this.prevAccelT = 0;
     this.lastSpeedSamples = [];
+    this.zeroTo30StartT = null;
+    this.bestZeroTo30S = null;
+    this.peakEnergyGainRate = 0;
+    this.preBrakeSpeeds = [];
+    this.brakeDuringLeanCount = 0;
+    this.currentLeanAbsDeg = 0;
+    this.lastGpsSpeedKmH = null;
+    this.lastGpsSpeedT = 0;
+    this.lastGpsDerivedAccel = null;
     this.obstacleFilter.reset();
   }
 
@@ -226,6 +306,16 @@ export class RiderEventDetector {
     const reversalsPerMin = (this.accelReversalEvents / windowSec) * 60;
     const coastRatio = this.coastSampleTotal > 0
       ? this.coastSampleCoasting / this.coastSampleTotal : 0;
+    // Aggressive-pattern score (spec §4.2 trip-level):
+    //   max(0, reversals - base) × (1 - coast_ratio) × duration_min.
+    const durationMin = windowSec / 60;
+    const aggressivePatternScore = Math.max(0, reversalsPerMin - this.cfg.accelReversalsPerMinBase)
+      * (1 - coastRatio) * durationMin;
+    // Pre-brake speed stats.
+    const preMean = this.preBrakeSpeeds.length > 0
+      ? this.preBrakeSpeeds.reduce((a, b) => a + b, 0) / this.preBrakeSpeeds.length : 0;
+    const preP95 = this.preBrakeSpeeds.length > 0
+      ? percentile(this.preBrakeSpeeds, 0.95) : 0;
     return {
       jerkSpikeCount: this.jerkSpikeCount,
       accelReversalsPerMinute: round2(reversalsPerMin),
@@ -235,6 +325,12 @@ export class RiderEventDetector {
       potholesDetected: this.potholes,
       normalStopsDetected: this.normalStops,
       peakSpeedKmH: round2(this.peakSpeedKmH),
+      zeroTo30TimeS: this.bestZeroTo30S !== null ? round2(this.bestZeroTo30S) : null,
+      energyGainRate: round2(this.peakEnergyGainRate),
+      aggressivePatternScore: round2(aggressivePatternScore),
+      preBrakeSpeedMeanKmH: round2(preMean),
+      preBrakeSpeedP95KmH: round2(preP95),
+      brakeDuringLeanCount: this.brakeDuringLeanCount,
     };
   }
 
@@ -254,6 +350,13 @@ export class RiderEventDetector {
     const minDurS = band === 'severe' ? this.cfg.accelSevereMinDurationS : this.cfg.accelMinDurationS;
 
     if (!this.openAccel) {
+      const gpsAccel = this.lastGpsDerivedAccel;
+      const tol = this.cfg.accelGpsCrossCheckTolerance;
+      // Cross-check only if we have a recent GPS-derived accel within 2 s
+      // of the current sample. Outside that window we accept the IMU.
+      const haveFreshGps = gpsAccel !== null && Math.abs(t - this.lastGpsSpeedT) < 2000;
+      const crossCheckFailed = haveFreshGps && gpsAccel !== null
+        && Math.abs(longAccel - gpsAccel) > Math.max(1.0, tol * Math.abs(longAccel));
       this.openAccel = {
         type: 'hard_acceleration',
         band,
@@ -267,6 +370,8 @@ export class RiderEventDetector {
           powertrain: this.cfg.powertrain,
           band,
           minDurationS: minDurS,
+          gpsCrossCheckFailed: crossCheckFailed,
+          gpsAccelMs2: haveFreshGps ? round2(gpsAccel!) : '',
         },
       };
     } else {
@@ -367,6 +472,45 @@ export class RiderEventDetector {
       this.openBrake.meta.band = 'severe';
       this.openBrake.meta.panic = true;
     }
+
+    // Trail-braking: any open brake event that also occurred while the
+    // rider was leaning into a corner. Fires as a separate event on top
+    // of the underlying hard_braking so the scorer can penalise it in
+    // the cornering bucket (spec §4.4 — serious risk on 2W).
+    const peakLean = this.currentLeanAbsDeg;
+    if (
+      peakLean >= this.cfg.trailBrakingMinLeanDeg &&
+      this.openBrake.peak >= this.cfg.trailBrakingMinDecelMs2
+    ) {
+      this.brakeDuringLeanCount++;
+      const trailDurMs = this.openBrake.lastOverT - this.openBrake.startedAt;
+      const severity: 1|2|3|4|5 =
+        this.openBrake.peak >= this.cfg.brakeSevereMs2 ? 5 :
+        this.openBrake.peak >= this.cfg.brakeEventMs2  ? 4 : 3;
+      const ctx = this.contextGetter();
+      this.listener?.({
+        id: `tbrake_${this.openBrake.lastOverT}_${++this.idCounter}`,
+        type: 'brake_during_lean',
+        startedAt: this.openBrake.startedAt,
+        endedAt: this.openBrake.lastOverT,
+        peak: this.openBrake.peak,
+        severity,
+        location: this.locationGetter(),
+        meta: {
+          decelMs2: round2(this.openBrake.peak),
+          leanDeg: round2(peakLean),
+          durationMs: trailDurMs,
+          speedKmH: round2(this.openBrake.preSpeedKmH),
+          phonePositionState: this.phonePosGetter().state,
+          phonePositionConf: this.phonePosGetter().confidence,
+          timeOfDay: ctx.timeOfDay,
+          timeOfDayWeight: ctx.timeOfDayWeight,
+        },
+      });
+    }
+
+    // Collect pre-brake speed for distribution stats.
+    this.preBrakeSpeeds.push(this.openBrake.preSpeedKmH);
 
     this.emitBandEvent(this.openBrake, this.openBrake.lastOverT);
     this.openBrake = null;
@@ -500,3 +644,14 @@ function bandRank(b: OverspeedBand): number {
 }
 
 function round2(x: number): number { return Math.round(x * 100) / 100; }
+
+/** Linear-interpolated percentile (simple; good enough for per-trip stats). */
+function percentile(values: number[], q: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = (sorted.length - 1) * q;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+}

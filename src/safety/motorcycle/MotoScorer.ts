@@ -250,6 +250,15 @@ export class MotoScorer {
       case 'hard_cornering':       base = 0.75; break;
       case 'extreme_lean':         base = 1.00; break;
       case 'corner_acceleration':  base = 1.25; break;
+      case 'brake_during_lean': {
+        // Trail-braking (spec §4.4): serious risk because lateral grip is
+        // already near the friction limit. Base is high; speed factor
+        // amplifies as in hard_braking.
+        base = 1.50;
+        const preSpd = numericMeta(ev, 'speedKmH') ?? 30;
+        base *= Math.max(0.5, Math.pow(preSpd / 30, 2));
+        break;
+      }
       case 'overspeeding': {
         // Spec §4.1: event_score = duration × (ratio - 1)² × band_multiplier.
         const dur = Math.max(1, (ev.endedAt - ev.startedAt) / 1000);
@@ -313,7 +322,92 @@ export class MotoScorer {
       penalty *= 0.5;
     }
 
+    // GPS cross-check discount (spec §4.2): an IMU-only accel event with
+    // GPS disagreement still contributes, but at half weight.
+    if (ev.type === 'hard_acceleration' && ev.meta?.gpsCrossCheckFailed === true) {
+      penalty *= 0.5;
+    }
+
     return penalty;
+  }
+
+  // ================================================================
+  //  Per-rider baselining (spec §5.4)
+  // ================================================================
+
+  /**
+   * Per-metric 20th-percentile of a rider's own history. Returns null
+   * until the rider has at least 50 completed scorable trips, per the
+   * spec's guard against under-sampled baselines.
+   *
+   * Used by the "behaviour change" flag: an event must exceed both the
+   * fleet threshold (already enforced by detectors) AND the rider's
+   * personal baseline to count as a regression. The numeric score is
+   * not modified — this is a separate signal layered on top.
+   */
+  riderBaseline(trips: TripRecord[]): RiderBaseline | null {
+    const scored = trips
+      .filter(t => t.score !== null && t.distanceM >= this.cfg.minScorableDistanceM);
+    if (scored.length < 50) return null;
+
+    return {
+      acceleration: percentile(scored.map(t => t.score!.acceleration.penalty), 0.20),
+      braking:      percentile(scored.map(t => t.score!.braking.penalty),      0.20),
+      cornering:    percentile(scored.map(t => t.score!.cornering.penalty),    0.20),
+      speeding:     percentile(scored.map(t => t.score!.speeding.penalty),     0.20),
+      distracted:   percentile(scored.map(t => t.score!.distracted.penalty),   0.20),
+      tripCount: scored.length,
+    };
+  }
+
+  /**
+   * Flag per-metric deviations where this trip's metric penalty exceeds
+   * the rider's own 20th-percentile baseline. Returns null if there
+   * aren't enough trips yet to baseline.
+   */
+  deviationFromBaseline(
+    trip: TripRecord,
+    trips: TripRecord[],
+  ): RiderDeviation | null {
+    const baseline = this.riderBaseline(trips);
+    if (!baseline || !trip.score) return null;
+    return {
+      acceleration: trip.score.acceleration.penalty > baseline.acceleration,
+      braking:      trip.score.braking.penalty      > baseline.braking,
+      cornering:    trip.score.cornering.penalty    > baseline.cornering,
+      speeding:     trip.score.speeding.penalty     > baseline.speeding,
+      distracted:   trip.score.distracted.penalty   > baseline.distracted,
+    };
+  }
+
+  // ================================================================
+  //  Per-rider rolling scores (spec §5.3)
+  // ================================================================
+
+  /**
+   * Distance-weighted composite score over the last `days` days.
+   * Returns null if no scorable trips fell inside the window.
+   */
+  rollingWindowScore(trips: TripRecord[], days: number, now: number = Date.now()): number | null {
+    const windowStart = now - days * 24 * 60 * 60 * 1000;
+    const scorable = trips.filter(t =>
+      t.score !== null &&
+      t.distanceM >= this.cfg.minScorableDistanceM &&
+      t.endedAt !== null &&
+      t.endedAt >= windowStart,
+    );
+    if (!scorable.length) return null;
+    let wsum = 0, wtot = 0;
+    for (const t of scorable) { wsum += t.score!.composite * t.distanceM; wtot += t.distanceM; }
+    return wtot > 0 ? round(wsum / wtot, 1) : null;
+  }
+
+  rolling30DayScore(trips: TripRecord[], now: number = Date.now()): number | null {
+    return this.rollingWindowScore(trips, 30, now);
+  }
+
+  rolling7DayScore(trips: TripRecord[], now: number = Date.now()): number | null {
+    return this.rollingWindowScore(trips, 7, now);
   }
 
   private splitByBucket(
@@ -345,6 +439,11 @@ export class MotoScorer {
         case 'hard_cornering':
         case 'extreme_lean':
         case 'corner_acceleration': r.cornering.push(ev);    break;
+        case 'brake_during_lean':
+          // Trail-braking is both a brake and a cornering risk. We
+          // attribute it to cornering for scoring since the crash chain
+          // is lean-dominated; hard_braking events fire independently.
+          r.cornering.push(ev); break;
         case 'overspeeding':        r.speeding.push(ev);     break;
         case 'phone_use':
         case 'distracted_driving':
@@ -375,4 +474,33 @@ function severityMult(s: 1|2|3|4|5): number {
 
 function round(n: number, d: number): number {
   const p = Math.pow(10, d); return Math.round(n * p) / p;
+}
+
+function percentile(values: number[], q: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = (sorted.length - 1) * q;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+}
+
+/** Per-metric 20th-percentile penalty across a rider's scorable history. */
+export interface RiderBaseline {
+  acceleration: number;
+  braking: number;
+  cornering: number;
+  speeding: number;
+  distracted: number;
+  tripCount: number;
+}
+
+/** Which metrics on this trip exceeded the rider's personal baseline. */
+export interface RiderDeviation {
+  acceleration: boolean;
+  braking: boolean;
+  cornering: boolean;
+  speeding: boolean;
+  distracted: boolean;
 }

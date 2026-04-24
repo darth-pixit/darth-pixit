@@ -65,6 +65,7 @@ import {
   RiderContext,
 } from './types';
 import { RiderEventDetector, RiderFeatureAggregates } from './RiderEventDetector';
+import { SignalProximityGetter } from './RoadObstacleFilter';
 
 export type MotoEventListener = (ev: MotoSafetyEvent) => void;
 
@@ -118,6 +119,7 @@ export class MotoEventDetector {
     cfg: MotoConfig,
     phonePosGetter?: () => PhonePositionSnapshot,
     contextGetter?: () => RiderContext,
+    signalProximityGetter?: SignalProximityGetter | null,
   ) {
     this.cfg = cfg;
     this.locationGetter = locationGetter;
@@ -129,8 +131,14 @@ export class MotoEventDetector {
     if (cfg.deliveryRiderMode && phonePosGetter && contextGetter) {
       this.riderDetector = new RiderEventDetector(
         cfg, locationGetter, phonePosGetter, contextGetter,
+        signalProximityGetter ?? null,
       );
     }
+  }
+
+  /** Wire / rewire the OSM-backed traffic-signal proximity callback. */
+  setSignalProximityGetter(g: SignalProximityGetter | null): void {
+    this.riderDetector?.setSignalProximityGetter(g);
   }
 
   setListener(l: MotoEventListener): void {
@@ -170,6 +178,15 @@ export class MotoEventDetector {
   updateLeanState(lean: LeanState): void {
     this.currentLeanDeg = lean.angleDeg;
     this.currentLeanAbsDeg = Math.abs(lean.angleDeg);
+    this.riderDetector?.updateLeanDeg(lean.angleDeg);
+  }
+
+  /**
+   * Forward a raw GPS speed sample to the RiderEventDetector so its
+   * tick-time GPS cross-check (spec §4.2) can compare against IMU accel.
+   */
+  ingestGPSSpeed(kmH: number, t: number): void {
+    this.riderDetector?.ingestGPSSpeed(kmH, t);
   }
 
   /**

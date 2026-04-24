@@ -109,9 +109,18 @@ export class PhonePositionClassifier {
   private prevX = 0; private prevY = 0; private prevZ = 0;
   private prevInitialised = false;
 
-  // Touch-event counter since last emit.
+  // Touch-event counter since last emit (and the last fully-observed rate
+  // so outside callers can reliably read a stable value between emits).
   private touchCount = 0;
+  private lastTouchRatePerSec = 0;
   private chargingState = false;
+
+  /**
+   * When set, the classifier caps confidence at this value and marks the
+   * result meta so downstream scoring knows a mount shift is suspected.
+   * Cleared by clearMountShiftSuspicion().
+   */
+  private mountShiftConfidenceCap: number | null = null;
 
   /**
    * Push raw accelerometer sample and the current gravity/vehicle-accel
@@ -159,8 +168,15 @@ export class PhonePositionClassifier {
 
     // Emit at most once per second.
     if (t - this.lastEmitT < EMIT_INTERVAL_MS) return this.lastOutput;
+    const windowSec = (t - this.lastEmitT) / 1000;
+    this.lastTouchRatePerSec = windowSec > 0 ? this.touchCount / windowSec : 0;
     this.lastEmitT = t;
-    this.lastOutput = this.classify(t);
+    const out = this.classify(t);
+    // Apply mount-shift confidence cap if active.
+    if (this.mountShiftConfidenceCap !== null && out.confidence > this.mountShiftConfidenceCap) {
+      out.confidence = this.mountShiftConfidenceCap;
+    }
+    this.lastOutput = out;
     // Reset touch counter for the next emit window.
     this.touchCount = 0;
     return this.lastOutput;
@@ -173,6 +189,28 @@ export class PhonePositionClassifier {
 
   get(): PhonePositionSnapshot { return this.lastOutput; }
 
+  /** Most recently computed touches/second. Stable between classify() emits. */
+  getTouchRatePerSec(): number { return this.lastTouchRatePerSec; }
+
+  /**
+   * External call from MotoTripManager when GPS-derived expected lean
+   * disagrees with the IMU-derived lean by > mountShiftMaxDiffDeg for
+   * mountShiftMinDurationS seconds. We cap confidence so downstream
+   * detectors treat the phone as potentially-shifted.
+   */
+  suspectMountShift(cap: number = 0.5): void {
+    this.mountShiftConfidenceCap = cap;
+    // Retroactively cap the last emitted output too.
+    if (this.lastOutput.confidence > cap) {
+      this.lastOutput = { ...this.lastOutput, confidence: cap };
+    }
+  }
+
+  /** Clear the mount-shift suspicion (e.g., after recalibration). */
+  clearMountShiftSuspicion(): void {
+    this.mountShiftConfidenceCap = null;
+  }
+
   reset(): void {
     this.samples = [];
     this.lastEmitT = 0;
@@ -180,6 +218,8 @@ export class PhonePositionClassifier {
     this.hpX = this.hpY = this.hpZ = 0;
     this.prevInitialised = false;
     this.touchCount = 0;
+    this.lastTouchRatePerSec = 0;
+    this.mountShiftConfidenceCap = null;
   }
 
   // ------- classifier -------

@@ -48,6 +48,19 @@ export interface ObstacleFilterVerdict {
   /** Diagnostic: the peak vertical/lateral accel used in the decision. */
   peakVertMs2: number;
   peakLatMs2: number;
+  /** True when the end-of-brake location was within OSM-signal range. */
+  nearTrafficSignal: boolean;
+  /** Metres to the nearest known traffic signal, when available. */
+  trafficSignalDistM: number | null;
+}
+
+/**
+ * Optional callback: returns known traffic-signal proximity for the
+ * location where the brake event ends. Populated by
+ * ContextEnrichmentService when OSM data is available.
+ */
+export interface SignalProximityGetter {
+  (): { near: boolean; distM: number | null };
 }
 
 interface AccelSample {
@@ -72,9 +85,19 @@ const BUFFER_MS = 3000;
 export class RoadObstacleFilter {
   private cfg: MotoConfig;
   private buffer: AccelSample[] = [];
+  private signalGetter: SignalProximityGetter | null = null;
 
-  constructor(cfg: MotoConfig) {
+  constructor(cfg: MotoConfig, signalGetter: SignalProximityGetter | null = null) {
     this.cfg = cfg;
+    this.signalGetter = signalGetter;
+  }
+
+  /**
+   * Wire the OSM-backed traffic-signal proximity callback. Pass null
+   * to detach (e.g., when context enrichment goes offline).
+   */
+  setSignalProximityGetter(g: SignalProximityGetter | null): void {
+    this.signalGetter = g;
   }
 
   updateConfig(patch: Partial<MotoConfig>): void {
@@ -106,6 +129,7 @@ export class RoadObstacleFilter {
   ): ObstacleFilterVerdict {
     const { peakVert, peakLat } = this.peaksInWindow(brakeStartT - 300, brakeEndT + 300);
     const durationS = (brakeEndT - brakeStartT) / 1000;
+    const signal = this.signalGetter ? this.signalGetter() : { near: false, distM: null };
 
     // -------- Filter 1: Speed breaker --------
     // Large vertical spike + very short forward decel + modest peak decel.
@@ -114,7 +138,11 @@ export class RoadObstacleFilter {
       durationS < this.cfg.speedBreakerMaxDecelDurationS &&
       peakDecelMs2 < this.cfg.speedBreakerMaxDecelMs2
     ) {
-      return { suppress: 'speed_breaker', peakVertMs2: peakVert, peakLatMs2: peakLat };
+      return {
+        suppress: 'speed_breaker',
+        peakVertMs2: peakVert, peakLatMs2: peakLat,
+        nearTrafficSignal: signal.near, trafficSignalDistM: signal.distM,
+      };
     }
 
     // -------- Filter 2: Pothole / obstacle dodge --------
@@ -124,21 +152,38 @@ export class RoadObstacleFilter {
       peakLat >= this.cfg.potholeLatPeakMs2 &&
       durationS < this.cfg.potholeMaxDecelDurationS
     ) {
-      return { suppress: 'pothole', peakVertMs2: peakVert, peakLatMs2: peakLat };
+      return {
+        suppress: 'pothole',
+        peakVertMs2: peakVert, peakLatMs2: peakLat,
+        nearTrafficSignal: signal.near, trafficSignalDistM: signal.distM,
+      };
     }
 
     // -------- Filter 3: Normal stop (red light) --------
-    // Gradual decel ramp (peak < threshold) that ends at a full stop.
-    // We do not have traffic-signal map data in v1, so we fall back to the
-    // simpler physical signature: gradual decel AND final speed ≈ 0.
-    if (
-      peakDecelMs2 < this.cfg.normalStopPeakMs2 &&
-      currentSpeedKmH <= this.cfg.normalStopEndSpeedKmH
-    ) {
-      return { suppress: 'normal_stop', peakVertMs2: peakVert, peakLatMs2: peakLat };
+    //
+    // Two paths:
+    //   (a) OSM says we're near a tagged traffic signal (spec §4.3, Filter 3):
+    //       relax the decel-peak ceiling a bit — we KNOW why they braked.
+    //       Allow up to 1.3× the normal-stop ceiling, still require final speed ≈ 0.
+    //   (b) No signal data, or not near one: keep the physical signature
+    //       (gradual decel + zero final speed). This is the v1 behaviour
+    //       and fires correctly on mid-block stops, yields, etc.
+    const endedAtZero = currentSpeedKmH <= this.cfg.normalStopEndSpeedKmH;
+    const gradualSignal = peakDecelMs2 < this.cfg.normalStopPeakMs2 * 1.3;
+    const gradualSignature = peakDecelMs2 < this.cfg.normalStopPeakMs2;
+    if (endedAtZero && ((signal.near && gradualSignal) || gradualSignature)) {
+      return {
+        suppress: 'normal_stop',
+        peakVertMs2: peakVert, peakLatMs2: peakLat,
+        nearTrafficSignal: signal.near, trafficSignalDistM: signal.distM,
+      };
     }
 
-    return { suppress: null, peakVertMs2: peakVert, peakLatMs2: peakLat };
+    return {
+      suppress: null,
+      peakVertMs2: peakVert, peakLatMs2: peakLat,
+      nearTrafficSignal: signal.near, trafficSignalDistM: signal.distM,
+    };
   }
 
   reset(): void {
