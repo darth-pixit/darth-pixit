@@ -10,6 +10,7 @@ import {
   StatusBar,
   SafeAreaView,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { useOBDStore } from '../obd/OBDStore';
 import { OBDStatusBanner } from '../obd/OBDStatusBanner';
