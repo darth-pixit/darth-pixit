@@ -6,6 +6,15 @@ import { requestBlePermissions } from './blePermissions';
 
 const SETUP_KEY = 'obd_auto_connect_enabled';
 
+// Fire the AsyncStorage read at module-import time — well before ThrottleView
+// mounts (which waits on Firebase auth). By the time the hook runs, this is
+// almost always already resolved, so the 'loading' phase never shows.
+let eagerValue: string | null | undefined = undefined;
+const eagerRead = AsyncStorage.getItem(SETUP_KEY).then((v) => {
+  eagerValue = v;
+  return v;
+});
+
 export type AutoConnectState =
   | { phase: 'loading' }         // still reading AsyncStorage
   | { phase: 'needs_setup' }     // first launch — show onboarding
@@ -29,19 +38,23 @@ export function useAutoConnect(vehicle: VehicleCfg): {
   completeSetup: () => Promise<boolean>;
 } {
   const start = useOBDStore((s) => s.start);
-  const [autoConnectState, setAutoConnectState] = useState<AutoConnectState>({ phase: 'loading' });
+  // Initialize synchronously from the eager read if it's already done,
+  // skipping the blank-screen 'loading' phase entirely for returning users.
+  const [autoConnectState, setAutoConnectState] = useState<AutoConnectState>(() => {
+    if (eagerValue !== undefined) {
+      return eagerValue === 'true' ? { phase: 'ready' } : { phase: 'needs_setup' };
+    }
+    return { phase: 'loading' };
+  });
 
   // Track whether start() has been fired in this mount so we don't call it twice
   // if the effect re-runs (e.g. strict-mode double-invoke in dev).
   const startedRef = useRef(false);
 
   useEffect(() => {
-    AsyncStorage.getItem(SETUP_KEY).then((val) => {
-      if (val === 'true') {
-        setAutoConnectState({ phase: 'ready' });
-      } else {
-        setAutoConnectState({ phase: 'needs_setup' });
-      }
+    if (autoConnectState.phase !== 'loading') return;
+    eagerRead.then((val) => {
+      setAutoConnectState(val === 'true' ? { phase: 'ready' } : { phase: 'needs_setup' });
     });
   }, []);
 

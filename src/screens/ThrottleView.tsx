@@ -156,8 +156,20 @@ export function ThrottleView() {
   const binDistRef = useRef<number[]>(Array(BIN_COUNT).fill(0));
   const [binAvgs, setBinAvgs] = useState<(number | null)[]>(Array(BIN_COUNT).fill(null));
 
-  // Live instantaneous km/L displayed in the badge above the thumb.
-  const [liveKmL, setLiveKmL] = useState<number | null>(null);
+  // Live instantaneous km/L — derived directly from store values so it updates
+  // every time new OBD data arrives, not just every 500ms like the trip average.
+  const liveKmL = useMemo(() => {
+    if (!hasLiveData) return null;
+    if (isDemoMode) {
+      const fr = 0.8 + demoThrottle * 9;
+      const sp = 20 + demoThrottle * 60;
+      return fr > 0.1 && sp > 0.5 ? sp / fr : null;
+    }
+    if (fuelRateLPerH != null && speedKmH != null && fuelRateLPerH > 0.1 && speedKmH > 0.5) {
+      return speedKmH / fuelRateLPerH;
+    }
+    return null;
+  }, [hasLiveData, isDemoMode, demoThrottle, fuelRateLPerH, speedKmH]);
 
   // Demo mode: animated sine-wave throttle simulation
   useEffect(() => {
@@ -185,7 +197,6 @@ export function ThrottleView() {
       binDistRef.current = Array(BIN_COUNT).fill(0);
       setTripAvgKmL(null);
       setBinAvgs(Array(BIN_COUNT).fill(null));
-      setLiveKmL(null);
     }
   }, [hasLiveData]);
 
@@ -196,11 +207,9 @@ export function ThrottleView() {
     binDistRef.current = Array(BIN_COUNT).fill(0);
     setTripAvgKmL(null);
     setBinAvgs(Array(BIN_COUNT).fill(null));
-    setLiveKmL(null);
   }, [isDemoMode]);
 
-  // Accumulate fuel & distance every 500ms to compute trip average + per-bin
-  // averages, and publish the live instantaneous km/L for the thumb badge.
+  // Accumulate fuel & distance every 500ms to compute trip average + per-bin averages.
   useEffect(() => {
     if (!hasLiveData) return;
     const id = setInterval(() => {
@@ -233,9 +242,6 @@ export function ThrottleView() {
             f > 0.01 ? binDistRef.current[i] / f : null,
           ),
         );
-        setLiveKmL(sp / fr);
-      } else {
-        setLiveKmL(null);
       }
     }, 500);
     return () => clearInterval(id);
@@ -258,7 +264,9 @@ export function ThrottleView() {
   useEffect(() => { throttleRef.current = throttle; }, [throttle]);
   useEffect(() => {
     const id = setInterval(() => {
-      setSmoothedThrottle((prev) => prev * 0.78 + throttleRef.current * 0.22);
+      // Alpha 0.35: time constant ~137ms — responsive enough to feel live,
+      // still cuts the per-poll jitter in engineLoadPct by ~65% per tick.
+      setSmoothedThrottle((prev) => prev * 0.65 + throttleRef.current * 0.35);
     }, 60);
     return () => clearInterval(id);
   }, []);
@@ -267,7 +275,7 @@ export function ThrottleView() {
   useEffect(() => {
     Animated.timing(anim, {
       toValue: smoothedThrottle,
-      duration: 260,
+      duration: 150,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: false,
     }).start();
