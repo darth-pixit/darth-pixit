@@ -79,6 +79,10 @@ import {
 import { MotoSafetyEvent, MotoConfig } from './types';
 import { ScoringContext } from '../SafetyScorer';
 
+/**
+ * Legacy motorcycle weights — used when deliveryRiderMode is disabled.
+ * Left intact so existing fleet integrations don't regress.
+ */
 const MOTO_WEIGHTS = {
   acceleration: 0.10,
   braking:      0.20,
@@ -86,6 +90,31 @@ const MOTO_WEIGHTS = {
   speeding:     0.30,
   distracted:   0.15,
   stability:    0.00, // intentionally 0 — see notes above
+} as const;
+
+/**
+ * Delivery-rider spec weights (§5.2). Sum = 1.0.
+ *
+ *   w_overspeed = 0.25
+ *   w_brake     = 0.25
+ *   w_phone     = 0.20
+ *   w_accel     = 0.12
+ *   w_corner    = 0.10
+ *   w_swerve    = 0.05
+ *   w_tilt      = 0.03   (absorbed into cornering bucket since we don't
+ *                         score tilt independently — it's a feature)
+ *
+ *  tilt + cornering together = 0.13 in the delivery model. We assign
+ *  cornering = 0.13 in the delivery weights below.
+ */
+const DELIVERY_WEIGHTS = {
+  acceleration: 0.12,
+  braking:      0.25,
+  cornering:    0.13,
+  speeding:     0.25,
+  distracted:   0.20,  // phone_use events
+  swerving:     0.05,
+  stability:    0.00,  // still coaching-only
 } as const;
 
 const MIN_DIVISOR_KM = 1.0;
@@ -115,21 +144,31 @@ export class MotoScorer {
       ...context,
     };
 
+    const useDelivery = this.cfg.deliveryRiderMode;
+    const weights = useDelivery ? DELIVERY_WEIGHTS : MOTO_WEIGHTS;
+
     const distKm = Math.max(distanceM / 1000, MIN_DIVISOR_KM);
-    const split  = this.splitByBucket(events);
+    const split  = this.splitByBucket(events, useDelivery);
 
     const acceleration = this.scoreCategory(split.acceleration, distKm, 'acceleration', ctx);
     const braking      = this.scoreCategory(split.braking,      distKm, 'braking',      ctx);
     const cornering    = this.scoreCategory(split.cornering,     distKm, 'cornering',    ctx);
     const speeding     = this.scoreCategory(split.speeding,      distKm, 'speeding',     ctx);
     const distracted   = this.scoreCategory(split.distracted,    distKm, 'distracted',   ctx);
+    const swerving     = useDelivery
+      ? this.scoreCategory(split.swerving ?? [], distKm, 'swerving', ctx)
+      : null;
 
-    const composite = crashed ? 0 :
-      MOTO_WEIGHTS.acceleration * acceleration.score +
-      MOTO_WEIGHTS.braking      * braking.score +
-      MOTO_WEIGHTS.cornering    * cornering.score +
-      MOTO_WEIGHTS.speeding     * speeding.score +
-      MOTO_WEIGHTS.distracted   * distracted.score;
+    let composite = crashed ? 0 :
+      weights.acceleration * acceleration.score +
+      weights.braking      * braking.score +
+      weights.cornering    * cornering.score +
+      weights.speeding     * speeding.score +
+      weights.distracted   * distracted.score;
+
+    if (useDelivery && swerving) {
+      composite += (weights as typeof DELIVERY_WEIGHTS).swerving * swerving.score;
+    }
 
     return {
       composite: round(composite, 1),
@@ -155,7 +194,7 @@ export class MotoScorer {
   private scoreCategory(
     events: MotoSafetyEvent[],
     distKm: number,
-    bucket: keyof typeof MOTO_WEIGHTS,
+    bucket: 'acceleration' | 'braking' | 'cornering' | 'speeding' | 'distracted' | 'swerving',
     ctx: { recoveredEventIds: Set<string>; graceFactor: number },
   ): CategoryScore {
     let penalty = 0;
@@ -175,26 +214,83 @@ export class MotoScorer {
     };
   }
 
-  private eventPenalty(ev: MotoSafetyEvent, bucket: keyof typeof MOTO_WEIGHTS): number {
+  private eventPenalty(
+    ev: MotoSafetyEvent,
+    bucket: 'acceleration' | 'braking' | 'cornering' | 'speeding' | 'distracted' | 'swerving',
+  ): number {
     const mult = severityMult(ev.severity);
     let base: number;
 
     switch (ev.type) {
-      case 'hard_acceleration':    base = 0.5; break;
+      case 'hard_acceleration': {
+        base = 0.5;
+        // Speed-context penalty (spec §4.2): high-speed accel scores harder.
+        const spd = numericMeta(ev, 'speedKmH') ?? 0;
+        base *= Math.max(0.5, Math.pow(spd / 30, 2));
+        // Traffic suppression: if ambient flow was very low, halve.
+        const ambient = numericMeta(ev, 'ambient2wSpeedKmH');
+        if (ambient !== null && ambient < 15) base *= 0.5;
+        break;
+      }
       case 'hard_braking': {
         base = 0.75;
         if (!this.cfg.hasABS)      base *= 1.15;
         if (this.cfg.hasPassenger) base *= 1.20;
-        // Emergency-braking mitigation (same as car scorer)
+        // Spec §4.3 quadratic speed factor — braking hard from high speed
+        // is disproportionately dangerous.
+        const preSpd = numericMeta(ev, 'preBrakeSpeedKmH') ?? 30;
+        base *= Math.max(0.5, Math.pow(preSpd / 30, 2));
+        // Panic signature: triple the base penalty.
+        if (ev.meta?.panic === true) base *= 3.0;
+        // Emergency-braking mitigation (same as car scorer, unchanged).
         if (ev.meta?.precededByHardAccel === false) base *= 0.6;
         break;
       }
+      case 'panic_brake':          base = 2.25; break; // equivalent of 3× hard_braking
       case 'hard_cornering':       base = 0.75; break;
-      case 'extreme_lean':         base = 1.00; break; // higher than hard corner — closer to traction limit
-      case 'corner_acceleration':  base = 1.25; break; // most dangerous single action a rider can take
-      case 'overspeeding':
-        base = 0.15 * Math.max(1, (ev.endedAt - ev.startedAt) / 1000);
+      case 'extreme_lean':         base = 1.00; break;
+      case 'corner_acceleration':  base = 1.25; break;
+      case 'brake_during_lean': {
+        // Trail-braking (spec §4.4): serious risk because lateral grip is
+        // already near the friction limit. Base is high; speed factor
+        // amplifies as in hard_braking.
+        base = 1.50;
+        const preSpd = numericMeta(ev, 'speedKmH') ?? 30;
+        base *= Math.max(0.5, Math.pow(preSpd / 30, 2));
         break;
+      }
+      case 'overspeeding': {
+        // Spec §4.1: event_score = duration × (ratio - 1)² × band_multiplier.
+        const dur = Math.max(1, (ev.endedAt - ev.startedAt) / 1000);
+        const ratio = numericMeta(ev, 'ratio') ?? 1.0;
+        const overshoot = Math.max(0, ratio - 1.0);
+        const bandMult = ev.meta?.band === 'severe' ? 3.8
+          : ev.meta?.band === 'event' ? 2.3
+          : 1.4;
+        base = 0.10 * dur * overshoot * overshoot * bandMult;
+        break;
+      }
+      case 'phone_use': {
+        const dur = Math.max(1, (ev.endedAt - ev.startedAt) / 1000);
+        const subtype = (ev.meta?.subtype as string | undefined) ?? 'handheld';
+        const typeMult =
+          subtype === 'texting'      ? 2.0 :
+          subtype === 'distraction'  ? 1.5 :
+          subtype === 'call'         ? 1.2 : 1.0;
+        // Incorporate speed scaling — phone use at 40 km/h is twice as bad
+        // as phone use at 20 km/h (crash energy scales with v, roughly linear
+        // here because cognitive delay at speed is linear in distance).
+        const spd = numericMeta(ev, 'speedKmH') ?? 20;
+        base = 0.25 * dur * typeMult * (spd / 20);
+        break;
+      }
+      case 'swerving': {
+        const impulse = numericMeta(ev, 'peakLatMs2') ?? 3.43;
+        base = impulse / 3.43;
+        // Spec §4.5: ×2 when phone held at event time.
+        if (ev.meta?.phonePositionState === 'held') base *= 2.0;
+        break;
+      }
       case 'distracted_driving':
       case 'drowsy_driving':
         base = 0.4 * Math.max(1, (ev.endedAt - ev.startedAt) / 1000);
@@ -206,31 +302,170 @@ export class MotoScorer {
       default: base = 0.5;
     }
 
-    return base * mult;
+    let penalty = base * mult;
+
+    // Time-of-day multiplier, applied as the spec requires (on the
+    // SCORE, not on the thresholds).
+    const todWeight = numericMeta(ev, 'timeOfDayWeight');
+    if (todWeight !== null && todWeight > 0) penalty *= todWeight;
+
+    // Phone-position gate: if the event relied on a mounted-only signal
+    // (lean / corner_accel / extreme_lean) AND the phone confidence was
+    // below the gate, discount by 50%. We don't suppress entirely because
+    // a high-magnitude event with a low-confidence classification is still
+    // informative — just less trusted.
+    const phoneConf = numericMeta(ev, 'phonePositionConf');
+    const phoneState = ev.meta?.phonePositionState as string | undefined;
+    const isMountedSignal =
+      ev.type === 'extreme_lean' || ev.type === 'corner_acceleration' || ev.type === 'hard_cornering';
+    if (isMountedSignal && phoneConf !== null && phoneConf < this.cfg.phonePositionMinConfidence && phoneState !== 'mounted') {
+      penalty *= 0.5;
+    }
+
+    // GPS cross-check discount (spec §4.2): an IMU-only accel event with
+    // GPS disagreement still contributes, but at half weight.
+    if (ev.type === 'hard_acceleration' && ev.meta?.gpsCrossCheckFailed === true) {
+      penalty *= 0.5;
+    }
+
+    return penalty;
   }
 
-  private splitByBucket(events: MotoSafetyEvent[]): Record<keyof typeof MOTO_WEIGHTS, MotoSafetyEvent[]> {
-    const r: Record<keyof typeof MOTO_WEIGHTS, MotoSafetyEvent[]> = {
-      acceleration: [], braking: [], cornering: [],
-      speeding: [], distracted: [], stability: [],
+  // ================================================================
+  //  Per-rider baselining (spec §5.4)
+  // ================================================================
+
+  /**
+   * Per-metric 20th-percentile of a rider's own history. Returns null
+   * until the rider has at least 50 completed scorable trips, per the
+   * spec's guard against under-sampled baselines.
+   *
+   * Used by the "behaviour change" flag: an event must exceed both the
+   * fleet threshold (already enforced by detectors) AND the rider's
+   * personal baseline to count as a regression. The numeric score is
+   * not modified — this is a separate signal layered on top.
+   */
+  riderBaseline(trips: TripRecord[]): RiderBaseline | null {
+    const scored = trips
+      .filter(t => t.score !== null && t.distanceM >= this.cfg.minScorableDistanceM);
+    if (scored.length < 50) return null;
+
+    return {
+      acceleration: percentile(scored.map(t => t.score!.acceleration.penalty), 0.20),
+      braking:      percentile(scored.map(t => t.score!.braking.penalty),      0.20),
+      cornering:    percentile(scored.map(t => t.score!.cornering.penalty),    0.20),
+      speeding:     percentile(scored.map(t => t.score!.speeding.penalty),     0.20),
+      distracted:   percentile(scored.map(t => t.score!.distracted.penalty),   0.20),
+      tripCount: scored.length,
+    };
+  }
+
+  /**
+   * Flag per-metric deviations where this trip's metric penalty exceeds
+   * the rider's own 20th-percentile baseline. Returns null if there
+   * aren't enough trips yet to baseline.
+   */
+  deviationFromBaseline(
+    trip: TripRecord,
+    trips: TripRecord[],
+  ): RiderDeviation | null {
+    const baseline = this.riderBaseline(trips);
+    if (!baseline || !trip.score) return null;
+    return {
+      acceleration: trip.score.acceleration.penalty > baseline.acceleration,
+      braking:      trip.score.braking.penalty      > baseline.braking,
+      cornering:    trip.score.cornering.penalty    > baseline.cornering,
+      speeding:     trip.score.speeding.penalty     > baseline.speeding,
+      distracted:   trip.score.distracted.penalty   > baseline.distracted,
+    };
+  }
+
+  // ================================================================
+  //  Per-rider rolling scores (spec §5.3)
+  // ================================================================
+
+  /**
+   * Distance-weighted composite score over the last `days` days.
+   * Returns null if no scorable trips fell inside the window.
+   */
+  rollingWindowScore(trips: TripRecord[], days: number, now: number = Date.now()): number | null {
+    const windowStart = now - days * 24 * 60 * 60 * 1000;
+    const scorable = trips.filter(t =>
+      t.score !== null &&
+      t.distanceM >= this.cfg.minScorableDistanceM &&
+      t.endedAt !== null &&
+      t.endedAt >= windowStart,
+    );
+    if (!scorable.length) return null;
+    let wsum = 0, wtot = 0;
+    for (const t of scorable) { wsum += t.score!.composite * t.distanceM; wtot += t.distanceM; }
+    return wtot > 0 ? round(wsum / wtot, 1) : null;
+  }
+
+  rolling30DayScore(trips: TripRecord[], now: number = Date.now()): number | null {
+    return this.rollingWindowScore(trips, 30, now);
+  }
+
+  rolling7DayScore(trips: TripRecord[], now: number = Date.now()): number | null {
+    return this.rollingWindowScore(trips, 7, now);
+  }
+
+  private splitByBucket(
+    events: MotoSafetyEvent[],
+    deliveryMode: boolean,
+  ): {
+    acceleration: MotoSafetyEvent[];
+    braking:      MotoSafetyEvent[];
+    cornering:    MotoSafetyEvent[];
+    speeding:     MotoSafetyEvent[];
+    distracted:   MotoSafetyEvent[];
+    stability:    MotoSafetyEvent[];
+    swerving?:    MotoSafetyEvent[];
+  } {
+    const r = {
+      acceleration: [] as MotoSafetyEvent[],
+      braking:      [] as MotoSafetyEvent[],
+      cornering:    [] as MotoSafetyEvent[],
+      speeding:     [] as MotoSafetyEvent[],
+      distracted:   [] as MotoSafetyEvent[],
+      stability:    [] as MotoSafetyEvent[],
+      swerving:     [] as MotoSafetyEvent[],
     };
     for (const ev of events) {
       switch (ev.type) {
         case 'hard_acceleration':   r.acceleration.push(ev); break;
-        case 'hard_braking':        r.braking.push(ev);      break;
+        case 'hard_braking':
+        case 'panic_brake':         r.braking.push(ev);      break;
         case 'hard_cornering':
         case 'extreme_lean':
         case 'corner_acceleration': r.cornering.push(ev);    break;
+        case 'brake_during_lean':
+          // Trail-braking is both a brake and a cornering risk. We
+          // attribute it to cornering for scoring since the crash chain
+          // is lean-dominated; hard_braking events fire independently.
+          r.cornering.push(ev); break;
         case 'overspeeding':        r.speeding.push(ev);     break;
+        case 'phone_use':
         case 'distracted_driving':
         case 'drowsy_driving':      r.distracted.push(ev);   break;
+        case 'swerving':            r.swerving.push(ev);     break;
         case 'speed_wobble':
         case 'highside_risk':       r.stability.push(ev);    break;
         case 'crash': break;
       }
     }
+    if (!deliveryMode) delete (r as { swerving?: MotoSafetyEvent[] }).swerving;
     return r;
   }
+}
+
+/**
+ * Safe numeric-meta extraction. Meta values can legally be string/bool/
+ * number; callers want a number or null.
+ */
+function numericMeta(ev: MotoSafetyEvent, key: string): number | null {
+  const v = ev.meta?.[key];
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
 function severityMult(s: 1|2|3|4|5): number {
@@ -239,4 +474,33 @@ function severityMult(s: 1|2|3|4|5): number {
 
 function round(n: number, d: number): number {
   const p = Math.pow(10, d); return Math.round(n * p) / p;
+}
+
+function percentile(values: number[], q: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = (sorted.length - 1) * q;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+}
+
+/** Per-metric 20th-percentile penalty across a rider's scorable history. */
+export interface RiderBaseline {
+  acceleration: number;
+  braking: number;
+  cornering: number;
+  speeding: number;
+  distracted: number;
+  tripCount: number;
+}
+
+/** Which metrics on this trip exceeded the rider's personal baseline. */
+export interface RiderDeviation {
+  acceleration: boolean;
+  braking: boolean;
+  cornering: boolean;
+  speeding: boolean;
+  distracted: boolean;
 }

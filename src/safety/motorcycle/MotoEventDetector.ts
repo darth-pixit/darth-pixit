@@ -57,7 +57,15 @@
 
 import { EventDetector } from '../EventDetector';
 import { GyroscopeSample } from '../types';
-import { MotoConfig, MotoSafetyEvent, LeanState } from './types';
+import {
+  MotoConfig,
+  MotoSafetyEvent,
+  LeanState,
+  PhonePositionSnapshot,
+  RiderContext,
+} from './types';
+import { RiderEventDetector, RiderFeatureAggregates } from './RiderEventDetector';
+import { SignalProximityGetter } from './RoadObstacleFilter';
 
 export type MotoEventListener = (ev: MotoSafetyEvent) => void;
 
@@ -75,6 +83,7 @@ export class MotoEventDetector {
   private cfg: MotoConfig;
   private listener: MotoEventListener | null = null;
   private baseDetector: EventDetector;
+  private riderDetector: RiderEventDetector | null = null;
 
   // ---- Lean state (fed from LeanAngleEstimator via TripManager) ----
   private currentLeanDeg = 0;
@@ -108,24 +117,76 @@ export class MotoEventDetector {
   constructor(
     locationGetter: () => { lat: number; lng: number } | null,
     cfg: MotoConfig,
+    phonePosGetter?: () => PhonePositionSnapshot,
+    contextGetter?: () => RiderContext,
+    signalProximityGetter?: SignalProximityGetter | null,
   ) {
     this.cfg = cfg;
     this.locationGetter = locationGetter;
     this.baseDetector = new EventDetector(locationGetter, cfg);
+
+    // When delivery rider mode is enabled, a RiderEventDetector replaces
+    // the generic accel/brake/overspeed paths. The legacy detectors for
+    // cornering and stability (lean/wobble/highside) are still used.
+    if (cfg.deliveryRiderMode && phonePosGetter && contextGetter) {
+      this.riderDetector = new RiderEventDetector(
+        cfg, locationGetter, phonePosGetter, contextGetter,
+        signalProximityGetter ?? null,
+      );
+    }
+  }
+
+  /** Wire / rewire the OSM-backed traffic-signal proximity callback. */
+  setSignalProximityGetter(g: SignalProximityGetter | null): void {
+    this.riderDetector?.setSignalProximityGetter(g);
   }
 
   setListener(l: MotoEventListener): void {
     this.listener = l;
-    // Forward base detector events via the same listener after adapting the type.
-    this.baseDetector.setListener((ev) => {
-      // EventDetector events are compatible with MotoSafetyEvent structure.
-      this.listener?.(ev as MotoSafetyEvent);
-    });
+    if (this.riderDetector) {
+      this.riderDetector.setListener((ev) => this.listener?.(ev));
+      // When delivery mode is active, mute the generic base detector's
+      // accel/brake/overspeed events — the RiderEventDetector owns them.
+      this.baseDetector.setListener((ev) => {
+        if (
+          ev.type === 'hard_acceleration' ||
+          ev.type === 'hard_braking' ||
+          ev.type === 'overspeeding'
+        ) {
+          return; // handled by RiderEventDetector with band semantics
+        }
+        this.listener?.(ev as MotoSafetyEvent);
+      });
+    } else {
+      this.baseDetector.setListener((ev) => this.listener?.(ev as MotoSafetyEvent));
+    }
+  }
+
+  /** Pass IMU axis samples (gravity-aligned vertical + lateral mag) to the
+   *  obstacle filter so the brake path can suppress speed breaker / pothole
+   *  / normal-stop false positives.
+   */
+  ingestAxisAccels(t: number, vertical: number, lateral: number): void {
+    this.riderDetector?.ingestVerticalLateral(t, vertical, lateral);
+  }
+
+  /** Aggregate features (jerk, reversals, coast ratio, obstacle counts). */
+  getRiderFeatures(): RiderFeatureAggregates | null {
+    return this.riderDetector ? this.riderDetector.getFeatures() : null;
   }
 
   updateLeanState(lean: LeanState): void {
     this.currentLeanDeg = lean.angleDeg;
     this.currentLeanAbsDeg = Math.abs(lean.angleDeg);
+    this.riderDetector?.updateLeanDeg(lean.angleDeg);
+  }
+
+  /**
+   * Forward a raw GPS speed sample to the RiderEventDetector so its
+   * tick-time GPS cross-check (spec §4.2) can compare against IMU accel.
+   */
+  ingestGPSSpeed(kmH: number, t: number): void {
+    this.riderDetector?.ingestGPSSpeed(kmH, t);
   }
 
   /**
@@ -143,6 +204,15 @@ export class MotoEventDetector {
     this.currentLongAccel = input.longitudinal;
 
     this.baseDetector.tick(input);
+
+    if (this.riderDetector) {
+      this.riderDetector.tick({
+        longitudinal: input.longitudinal,
+        lateral: input.lateral,
+        speedKmH: input.speedKmH,
+        t: input.t,
+      });
+    }
 
     this.checkExtremeLean(input.t);
     this.checkCornerAccel(input.longitudinal, input.t);
@@ -163,6 +233,7 @@ export class MotoEventDetector {
 
   flush(t: number): void {
     this.baseDetector.flush(t);
+    this.riderDetector?.flush(t);
     if (this.extremeLeanSince > 0) {
       const dur = t - this.extremeLeanSince;
       if (dur >= this.cfg.minEventDurationS * 1000) this.emitExtremeLean(t, dur);
@@ -178,10 +249,12 @@ export class MotoEventDetector {
   updateConfig(patch: Partial<MotoConfig>): void {
     this.cfg = { ...this.cfg, ...patch };
     this.baseDetector.updateConfig(patch);
+    this.riderDetector?.updateConfig(patch);
   }
 
   reset(): void {
     this.baseDetector.reset();
+    this.riderDetector?.reset();
     this.currentLeanDeg = 0;
     this.currentLeanAbsDeg = 0;
     this.extremeLeanSince = 0;
