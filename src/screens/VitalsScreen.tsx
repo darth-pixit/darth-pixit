@@ -13,7 +13,6 @@ import { useOBDStore } from '../obd/OBDStore';
 import { OBDData, SeatbeltStatus } from '../obd/OBDManager';
 
 interface VitalsScreenProps {
-  visible: boolean;
   onClose: () => void;
 }
 
@@ -336,26 +335,26 @@ function buildSections(d: OBDData): VitalSection[] {
           label: 'Distance With MIL On',
           value: fmt(d.distanceMilOnKm, 0),
           unit: 'km',
-          severity: (d.distanceMilOnKm ?? 0) > 0 ? 'warn' : 'good',
+          severity: d.distanceMilOnKm == null ? 'neutral' : d.distanceMilOnKm > 0 ? 'warn' : 'good',
         },
         {
           label: 'Time With MIL On',
           value: fmtMinutes(d.timeMilOnMin),
-          severity: (d.timeMilOnMin ?? 0) > 0 ? 'warn' : 'good',
+          severity: d.timeMilOnMin == null ? 'neutral' : d.timeMilOnMin > 0 ? 'warn' : 'good',
         },
       ],
     },
   ];
 }
 
-export function VitalsScreen({ visible, onClose }: VitalsScreenProps) {
+export function VitalsScreen({ onClose }: VitalsScreenProps) {
   const data = useOBDStore();
   const sections = buildSections(data);
   const isLive = data.state === 'ready';
 
   return (
     <Modal
-      visible={visible}
+      visible
       animationType="slide"
       onRequestClose={onClose}
       presentationStyle="fullScreen"

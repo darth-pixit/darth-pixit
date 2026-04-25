@@ -529,7 +529,7 @@ export function ThrottleView() {
 
       </View>
 
-      <VitalsScreen visible={showVitals} onClose={() => setShowVitals(false)} />
+      {showVitals && <VitalsScreen onClose={() => setShowVitals(false)} />}
     </SafeAreaView>
   );
 }

@@ -213,6 +213,7 @@ export class OBDManager {
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private notifySubscription: { remove: () => void } | null = null;
+  private disconnectSubscription: { remove: () => void } | null = null;
   private cachedDeviceId: string | null = null;
   private vehicle: VehicleCfg | null = null;
   private onUpdate: ((data: OBDData) => void) | null = null;
@@ -256,6 +257,8 @@ export class OBDManager {
 
     this.notifySubscription?.remove();
     this.notifySubscription = null;
+    this.disconnectSubscription?.remove();
+    this.disconnectSubscription = null;
 
     try {
       await this.device?.cancelConnection();
@@ -454,7 +457,8 @@ export class OBDManager {
       }
     );
 
-    this.device.onDisconnected((err) => {
+    this.disconnectSubscription?.remove();
+    this.disconnectSubscription = this.device.onDisconnected((err) => {
       this.log(`disconnected: ${err?.message ?? 'ok'}`);
       if (this.polling) this.scheduleReconnect();
     });
@@ -475,6 +479,10 @@ export class OBDManager {
     if (!probeOk) {
       this.notifySubscription?.remove();
       this.notifySubscription = null;
+      this.disconnectSubscription?.remove();
+      this.disconnectSubscription = null;
+      try { await this.device?.cancelConnection(); } catch { /* ignore */ }
+      this.device = null;
       if (this.active) this.emit({ state: 'error', errorMsg: 'ECU not responding. Turn ignition ON.' });
       return;
     }
