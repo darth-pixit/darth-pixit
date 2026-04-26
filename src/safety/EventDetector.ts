@@ -336,11 +336,18 @@ export class EventDetector {
         }
       }
     } else if (this.openOverspeed) {
-      const durationMs = this.openOverspeed.lastOverT - this.openOverspeed.startedAt;
-      if (durationMs >= this.cfg.minOverspeedDurationS * 1000) {
-        this.closeEvent(this.openOverspeed, this.openOverspeed.lastOverT);
+      // Apply the same gap-merge window used by other event types. A single
+      // GPS reading dipping below the limit (1 Hz GPS, quantization, elevation
+      // bumps) must not split one speeding stretch into two scored events.
+      const gapMs = t - this.openOverspeed.lastOverT;
+      if (gapMs > this.cfg.maxEventGapS * 1000) {
+        const durationMs = this.openOverspeed.lastOverT - this.openOverspeed.startedAt;
+        if (durationMs >= this.cfg.minOverspeedDurationS * 1000) {
+          this.closeEvent(this.openOverspeed, this.openOverspeed.lastOverT);
+        }
+        this.openOverspeed = null;
       }
-      this.openOverspeed = null;
+      // else: still within the merge window — keep the event open.
     }
   }
 

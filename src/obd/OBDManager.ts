@@ -273,14 +273,16 @@ export class OBDManager {
     this.log(`BLE state: ${state}`);
     if (state === 'PoweredOn') return true;
     if (state === 'Unauthorized') {
-      this.emit({
-        state: 'error',
-        errorMsg: 'Bluetooth permission denied. Enable it in Settings → DarthPixit → Bluetooth.',
-      });
+      if (this.active) {
+        this.emit({
+          state: 'error',
+          errorMsg: 'Bluetooth permission denied. Enable it in Settings → DarthPixit → Bluetooth.',
+        });
+      }
       return false;
     }
     if (state === 'Unsupported') {
-      this.emit({ state: 'error', errorMsg: 'BLE not supported on this device.' });
+      if (this.active) this.emit({ state: 'error', errorMsg: 'BLE not supported on this device.' });
       return false;
     }
 
@@ -295,22 +297,28 @@ export class OBDManager {
         if (s === 'Unauthorized' || s === 'Unsupported') {
           sub.remove();
           clearTimeout(timer);
-          this.emit({
-            state: 'error',
-            errorMsg:
-              s === 'Unauthorized'
-                ? 'Bluetooth permission denied. Enable it in Settings.'
-                : 'BLE not supported on this device.',
-          });
+          // stop() may have been called while we were waiting — don't emit
+          // error into the already-idle state.
+          if (this.active) {
+            this.emit({
+              state: 'error',
+              errorMsg:
+                s === 'Unauthorized'
+                  ? 'Bluetooth permission denied. Enable it in Settings.'
+                  : 'BLE not supported on this device.',
+            });
+          }
           resolve(false);
         }
       }, true);
       const timer = setTimeout(() => {
         sub.remove();
-        this.emit({
-          state: 'error',
-          errorMsg: 'Bluetooth is off. Turn it on and try again.',
-        });
+        if (this.active) {
+          this.emit({
+            state: 'error',
+            errorMsg: 'Bluetooth is off. Turn it on and try again.',
+          });
+        }
         resolve(false);
       }, timeoutMs);
     });

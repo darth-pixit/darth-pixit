@@ -10,10 +10,9 @@ const SETUP_KEY = 'obd_auto_connect_enabled';
 // mounts (which waits on Firebase auth). By the time the hook runs, this is
 // almost always already resolved, so the 'loading' phase never shows.
 let eagerValue: string | null | undefined = undefined;
-const eagerRead = AsyncStorage.getItem(SETUP_KEY).then((v) => {
-  eagerValue = v;
-  return v;
-});
+const eagerRead = AsyncStorage.getItem(SETUP_KEY)
+  .then((v) => { eagerValue = v; return v; })
+  .catch((): null => { eagerValue = null; return null; });
 
 export type AutoConnectState =
   | { phase: 'loading' }         // still reading AsyncStorage

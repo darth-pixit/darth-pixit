@@ -46,11 +46,11 @@ function lerpHex(a: string, b: string, t: number): string {
   const br = parseInt(b.slice(1, 3), 16);
   const bg = parseInt(b.slice(3, 5), 16);
   const bb = parseInt(b.slice(5, 7), 16);
-  const r = Math.round(ar + (br - ar) * t);
-  const g = Math.round(ag + (bg - ag) * t);
-  const c = Math.round(ab + (bb - ab) * t);
+  const r    = Math.round(ar + (br - ar) * t);
+  const g    = Math.round(ag + (bg - ag) * t);
+  const blue = Math.round(ab + (bb - ab) * t);
   const hex = (n: number) => n.toString(16).padStart(2, '0');
-  return `#${hex(r)}${hex(g)}${hex(c)}`;
+  return `#${hex(r)}${hex(g)}${hex(blue)}`;
 }
 
 // Build the background gradient as precomputed strip colors so we render
@@ -353,6 +353,7 @@ export function ThrottleView() {
   if (autoConnectState.phase === 'loading') {
     return (
       <SafeAreaView style={styles.safe}>
+        <StatusBar barStyle="light-content" backgroundColor="#0D0D0D" />
         <ActivityIndicator size="large" color="#22C55E" style={styles.loadingSpinner} />
       </SafeAreaView>
     );

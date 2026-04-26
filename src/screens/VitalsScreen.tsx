@@ -351,7 +351,17 @@ function buildSections(d: OBDData): VitalSection[] {
 export function VitalsScreen({ visible, onClose }: VitalsScreenProps) {
   const data = useOBDStore();
   const sections = buildSections(data);
-  const isLive = data.state === 'ready';
+  const { state } = data;
+  const isLive = state === 'ready';
+
+  let subtitle: string;
+  if (isLive) {
+    subtitle = 'Live OBD-II data, ranked by importance';
+  } else if (state === 'reconnecting') {
+    subtitle = 'Reconnecting — showing last known values';
+  } else {
+    subtitle = 'OBD adapter not connected — values will appear once a connection is live';
+  }
 
   return (
     <Modal
@@ -365,11 +375,7 @@ export function VitalsScreen({ visible, onClose }: VitalsScreenProps) {
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Text style={styles.title}>Car Vitals</Text>
-            <Text style={styles.subtitle}>
-              {isLive
-                ? 'Live OBD-II data, ranked by importance'
-                : 'OBD adapter not connected — values will appear once a connection is live'}
-            </Text>
+            <Text style={styles.subtitle}>{subtitle}</Text>
           </View>
           <TouchableOpacity onPress={onClose} hitSlop={10} style={styles.closeBtn}>
             <Text style={styles.closeText}>Close</Text>
