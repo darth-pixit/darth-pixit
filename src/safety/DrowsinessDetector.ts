@@ -60,10 +60,16 @@ import { GyroscopeSample, DrowsinessSignal, SafetyConfig, DEFAULT_SAFETY_CONFIG 
 
 export type DrowsinessListener = (signal: DrowsinessSignal) => void;
 
+/** One sample in the rolling window, keyed by timestamp for time-based eviction. */
+interface WindowSample {
+  t: number;
+  mag: number;
+}
+
 /** Samples collected for one statistical window. */
 interface Window {
   startT: number;
-  samples: number[]; // angular velocity magnitude values
+  samples: WindowSample[];
 }
 
 export class DrowsinessDetector {
@@ -71,7 +77,7 @@ export class DrowsinessDetector {
   private listener: DrowsinessListener | null = null;
 
   /** Calibration: collect samples during NORMAL early-trip driving. */
-  private calibrationSamples: number[] = [];
+  private calibrationSamples: WindowSample[] = [];
   private calibrationStart = 0;
   private calibrationComplete = false;
   private baselineVariance = 0;
@@ -116,7 +122,7 @@ export class DrowsinessDetector {
     // Calibration phase
     if (!this.calibrationComplete) {
       if (this.calibrationStart === 0) this.calibrationStart = sample.t;
-      this.calibrationSamples.push(mag);
+      this.calibrationSamples.push({ t: sample.t, mag });
       if (sample.t - this.calibrationStart >= calibMinMs) {
         this.baselineVariance = sampleVariance(this.calibrationSamples);
         this.calibrationComplete = true;
@@ -127,17 +133,21 @@ export class DrowsinessDetector {
       return;
     }
 
-    // Rolling window update
+    // Rolling window update — evict by timestamp, not by sample count.
+    // A count-based eviction assumes a fixed sample rate (60 Hz); real
+    // devices vary from 30–200 Hz. Time-based eviction is rate-agnostic.
     if (this.window.startT === 0) this.window.startT = sample.t;
-    this.window.samples.push(mag);
-    // Evict samples older than WINDOW_MS.
-    const cutoffIndex = this.window.samples.length -
-      Math.round((this.WINDOW_MS / 1000) * 60); // approximate at 60 Hz
-    if (cutoffIndex > 0) {
-      this.window.samples = this.window.samples.slice(cutoffIndex);
+    this.window.samples.push({ t: sample.t, mag });
+    const windowCutoff = sample.t - this.WINDOW_MS;
+    // Drop from the front while there are at least 2 samples, preserving
+    // the first sample so we always have a non-empty window.
+    while (this.window.samples.length > 1 && this.window.samples[0].t < windowCutoff) {
+      this.window.samples.shift();
     }
 
-    if (this.window.samples.length < 60) return; // need at least 1 s of data
+    // Need at least 1 s of samples (at any rate) before computing variance.
+    const windowSpanMs = sample.t - this.window.samples[0].t;
+    if (this.window.samples.length < 10 || windowSpanMs < 1000) return;
 
     const currentVariance = sampleVariance(this.window.samples);
     if (this.baselineVariance < 1e-6) return; // degenerate baseline
@@ -179,9 +189,9 @@ export class DrowsinessDetector {
   }
 }
 
-function sampleVariance(samples: number[]): number {
+function sampleVariance(samples: WindowSample[]): number {
   if (samples.length < 2) return 0;
-  const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
-  const sq = samples.reduce((acc, v) => acc + (v - mean) ** 2, 0);
+  const mean = samples.reduce((a, s) => a + s.mag, 0) / samples.length;
+  const sq = samples.reduce((acc, s) => acc + (s.mag - mean) ** 2, 0);
   return sq / (samples.length - 1);
 }

@@ -369,6 +369,12 @@ export class OBDManager {
       this.getBle().startDeviceScan(null, { allowDuplicates: false }, (err, device) => {
         if (err) {
           this.log(`scan error: ${err.message ?? err}`);
+          // A fatal BLE error means we will never see an adapter in this scan.
+          // Stop immediately so the caller gets null right away instead of
+          // waiting the full 15 s timeout.
+          clearTimeout(timer);
+          this.getBle().stopDeviceScan();
+          resolve(null);
           return;
         }
         if (!device) return;

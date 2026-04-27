@@ -336,11 +336,19 @@ export class EventDetector {
         }
       }
     } else if (this.openOverspeed) {
-      const durationMs = this.openOverspeed.lastOverT - this.openOverspeed.startedAt;
-      if (durationMs >= this.cfg.minOverspeedDurationS * 1000) {
-        this.closeEvent(this.openOverspeed, this.openOverspeed.lastOverT);
+      const gapMs = t - this.openOverspeed.lastOverT;
+      if (gapMs > this.cfg.maxEventGapS * 1000) {
+        // Speed has stayed below the limit long enough — commit the event if
+        // the in-limit duration met the minimum. Mirrors the gap-based close
+        // logic in updateDirectional() so all event types behave consistently.
+        const durationMs = this.openOverspeed.lastOverT - this.openOverspeed.startedAt;
+        if (durationMs >= this.cfg.minOverspeedDurationS * 1000) {
+          this.closeEvent(this.openOverspeed, this.openOverspeed.lastOverT);
+        }
+        this.openOverspeed = null;
       }
-      this.openOverspeed = null;
+      // else: inside merge window — keep open so a brief dip below the limit
+      // doesn't fragment a single speeding incident into multiple events.
     }
   }
 

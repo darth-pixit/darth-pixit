@@ -13,20 +13,23 @@
  *
  *   const engine = await SafetyEngine.create(kv);
  *
- *   engine.bindOBDSpeed((cb) => {
- *     OBDManager.getInstance().setUpdateHandler((data) => {
- *       if (data.speedKmH !== null) cb(data.speedKmH);
- *     });
- *     return () => OBDManager.getInstance().setUpdateHandler(null as any);
- *   });
- *
+ *   // OBDManager.setUpdateHandler() has a single callback slot, so wiring
+ *   // bindOBDSpeed and bindOBDSnapshot separately would cause the second to
+ *   // overwrite the first.  Wire a SINGLE handler that feeds BOTH:
  *   engine.bindOBDSnapshot((cb) => {
  *     OBDManager.getInstance().setUpdateHandler((data) => {
- *       cb({ rpm: data.rpm, speedKmH: data.speedKmH,
- *            engineLoadPct: data.engineLoadPct, coolantC: data.coolantC,
- *            warmupComplete: (data.coolantC ?? 0) > 70, t: Date.now() });
+ *       cb({
+ *         rpm: data.rpm,
+ *         speedKmH: data.speedKmH,
+ *         engineLoadPct: data.engineLoadPct,
+ *         coolantC: data.coolantC,
+ *         warmupComplete: (data.coolantC ?? 0) > 70,
+ *         t: Date.now(),
+ *       });
  *     });
- *     return () => {};
+ *     // bindOBDSnapshot already forwards speed via ingestOBDSnapshot, so
+ *     // bindOBDSpeed is NOT needed when using this pattern.
+ *     return () => OBDManager.getInstance().setUpdateHandler(null as any);
  *   });
  *
  *   // GPS: react-native-geolocation-service or expo-location
