@@ -237,6 +237,7 @@ export class OBDManager {
     this.active = true;
     this.vehicle = vehicle;
     this.reconnectAttempt = 0;
+    this.tickCount = 0;
     this.logBuf = [];
     this.log('start()');
     await this.connect();
@@ -456,7 +457,12 @@ export class OBDManager {
 
     this.device.onDisconnected((err) => {
       this.log(`disconnected: ${err?.message ?? 'ok'}`);
-      if (this.polling) this.scheduleReconnect();
+      // Guard on `active`, not `polling`: if the adapter drops during the
+      // init/probe phase (before pollLoop starts), `polling` is still false
+      // but we still want an auto-reconnect.  stop() sets `active = false`
+      // before calling cancelConnection(), so we won't reconnect after an
+      // intentional disconnect.
+      if (this.active) this.scheduleReconnect();
     });
 
     for (const cmd of INIT_CMDS) {
@@ -475,7 +481,13 @@ export class OBDManager {
     if (!probeOk) {
       this.notifySubscription?.remove();
       this.notifySubscription = null;
-      if (this.active) this.emit({ state: 'error', errorMsg: 'ECU not responding. Turn ignition ON.' });
+      // Only emit a terminal error if a reconnect hasn't already been scheduled
+      // (e.g. the adapter dropped mid-probe and onDisconnected already called
+      // scheduleReconnect). In that case we stay in 'reconnecting' and let the
+      // timer retry rather than overwriting it with a misleading error message.
+      if (this.active && this.reconnectTimer === null) {
+        this.emit({ state: 'error', errorMsg: 'ECU not responding. Turn ignition ON.' });
+      }
       return;
     }
 
@@ -844,6 +856,9 @@ export class OBDManager {
   }
 
   private emitCurrent() {
+    // Spread to a new object so Zustand's Object.is guard always sees a fresh
+    // reference and triggers re-renders, regardless of whether log() ran first.
+    this.data = { ...this.data };
     this.onUpdate?.(this.data);
   }
 }

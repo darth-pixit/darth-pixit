@@ -17,7 +17,6 @@ export function OBDStatusBanner() {
   if (state === 'idle') return null;
 
   const configs = {
-    idle:         { color: '#888',    label: '',                      showSpinner: false },
     scanning:     { color: '#F5A623', label: 'Scanning for adapter…', showSpinner: true  },
     connecting:   { color: '#F5A623', label: 'Connecting…',           showSpinner: true  },
     ready:        { color: '#7ED321', label: adapterName ?? 'OBD',    showSpinner: false },
