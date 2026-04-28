@@ -35,11 +35,47 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Install JS dependencies
-        run: npm ci
+        shell: bash
+        run: |
+          set -o pipefail
+          npm ci 2>&1 | tee /tmp/npm-ci.log
 
       - name: Build release APK
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew assembleRelease --no-daemon --stacktrace --console=plain 2>&1 | tee /tmp/gradle.log
+
+      - name: Print failure tail to job summary
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "## Failure tail"
+            for f in /tmp/gradle.log /tmp/npm-ci.log; do
+              if [ -f "$f" ]; then
+                echo ""
+                echo "### \`$f\` (last 300 lines)"
+                echo '```'
+                tail -300 "$f"
+                echo '```'
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload full build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            /tmp/gradle.log
+            /tmp/npm-ci.log
+            android/app/build/reports/
+            android/app/build/outputs/logs/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Resolve release tag
         id: tag
