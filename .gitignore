@@ -25,6 +25,11 @@ ios/Podfile.lock
 android/.gradle/
 android/local.properties
 
+# Production keystores (never commit; debug.keystore is intentionally checked in)
+android/app/*.keystore
+android/app/*.jks
+!android/app/debug.keystore
+
 # Environment
 .env
 .env.local
