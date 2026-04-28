@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { AuthProvider } from './src/auth/AuthContext';
 import { RootNavigator } from './src/navigation/RootNavigator';
+import { initSafetyEngine } from './src/safety/SafetyController';
 
 interface State { error: Error | null }
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, State> {
@@ -20,6 +21,10 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, State
 }
 
 export default function App() {
+  useEffect(() => {
+    initSafetyEngine().catch((e) => console.warn('[Safety] init failed:', e));
+  }, []);
+
   return (
     <ErrorBoundary>
       <AuthProvider>
