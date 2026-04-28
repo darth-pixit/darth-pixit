@@ -32,6 +32,9 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
+      - name: Install required Android SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;26.1.10909125"
+
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Install JS dependencies
@@ -39,7 +42,18 @@ jobs:
 
       - name: Build release APK
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Upload Gradle reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-reports
+          path: |
+            android/app/build/reports/
+            android/app/build/outputs/logs/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Resolve release tag
         id: tag
