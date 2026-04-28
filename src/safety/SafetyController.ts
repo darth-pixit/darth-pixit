@@ -47,8 +47,9 @@ export function getSafetyEngine(): Promise<SafetyEngine> {
 
 function bindOBDStore(engine: SafetyEngine): void {
   // Lifecycle: start/end trips on OBD ready-state transitions.
+  // Store the unsubscribe fn so a future engine.dispose() can clean it up.
   let tripStarted = false;
-  useOBDStore.subscribe((next, prev) => {
+  const unsubLifecycle = useOBDStore.subscribe((next, prev) => {
     const liveNow = next.state === 'ready';
     const liveBefore = prev.state === 'ready';
 
@@ -61,11 +62,15 @@ function bindOBDStore(engine: SafetyEngine): void {
     }
   });
 
-  // Data: forward every OBD update as an OBDSnapshot. TripManager
-  // ignores snapshots when no trip is active, so it's safe to fire
-  // unconditionally.
-  engine.bindOBDSnapshot((cb) =>
-    useOBDStore.subscribe((s) => {
+  // Wire the lifecycle unsubscribe into the engine so engine.dispose() also
+  // tears down this subscription. SafetyEngine.dispose() calls each fn in
+  // this.unsubscribers, but it's a private array — we piggyback via bindOBDSnapshot
+  // by registering a no-op binder that returns our cleanup fn.
+  engine.bindOBDSnapshot((cb) => {
+    // Data: forward every OBD update as an OBDSnapshot. TripManager
+    // ignores snapshots when no trip is active, so it's safe to fire
+    // unconditionally.
+    const unsubData = useOBDStore.subscribe((s) => {
       const snap: OBDSnapshot = {
         rpm: s.rpm,
         speedKmH: s.speedKmH,
@@ -75,6 +80,11 @@ function bindOBDStore(engine: SafetyEngine): void {
         t: Date.now(),
       };
       cb(snap);
-    }),
-  );
+    });
+    // Return a combined cleanup that also removes the lifecycle subscription.
+    return () => {
+      unsubData();
+      unsubLifecycle();
+    };
+  });
 }
