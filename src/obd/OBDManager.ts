@@ -208,6 +208,7 @@ export class OBDManager {
   private responseResolve: ((s: string) => void) | null = null;
   private active = false;
   private polling = false;
+  private pollingGen = 0;
   private lowPidIndex = 0;
   private tickCount = 0;
   private reconnectAttempt = 0;
@@ -503,8 +504,9 @@ export class OBDManager {
 
     this.reconnectAttempt = 0;
     this.polling = true;
+    const myGen = ++this.pollingGen;
     this.emit({ state: 'ready', errorMsg: null });
-    this.pollLoop();
+    this.pollLoop(myGen);
   }
 
   /**
@@ -683,8 +685,10 @@ export class OBDManager {
     }
   }
 
-  private async pollLoop() {
-    while (this.polling) {
+  private async pollLoop(gen: number) {
+    // Guard against stale loops: if reconnect starts a new loop (new gen)
+    // before this one exits, the old loop sees gen !== pollingGen and stops.
+    while (this.polling && this.pollingGen === gen) {
       try {
         // Emit after every high-priority PID so the UI updates as each value
         // arrives rather than waiting for a full round of 4 PIDs to complete.
@@ -900,11 +904,11 @@ function parseHexResponse(raw: string, headerLen = 2): number[] | null {
     if (m) parts = m;
   }
   if (parts.length <= headerLen) return null;
-  try {
-    return parts.slice(headerLen).map((h) => parseInt(h, 16));
-  } catch {
-    return null;
-  }
+  const bytes = parts.slice(headerLen).map((h) => parseInt(h, 16));
+  // parseInt returns NaN for empty strings or invalid hex — it never throws.
+  // NaN stored in data fields silently breaks all arithmetic downstream.
+  if (bytes.some(Number.isNaN)) return null;
+  return bytes;
 }
 
 function sleep(ms: number) {

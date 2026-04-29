@@ -76,7 +76,7 @@ export function alertFromEvent(e: SafetyEvent): Alert {
     title: EVENT_TITLE[e.type],
     detail: detailForEvent(e),
     source: e.type,
-    at: e.endedAt || e.startedAt,
+    at: e.endedAt,
   };
 }
 

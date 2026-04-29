@@ -470,7 +470,7 @@ function computeSeverity(
   peak: number,
   cfg: SafetyConfig,
 ): 1 | 2 | 3 | 4 | 5 {
-  let ratio: number;
+  let ratio = 0;
   switch (type) {
     case 'hard_acceleration': ratio = peak / cfg.hardAccelThreshold; break;
     case 'hard_braking':      ratio = peak / cfg.hardBrakeThreshold; break;

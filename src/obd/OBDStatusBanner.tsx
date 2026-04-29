@@ -16,7 +16,10 @@ export function OBDStatusBanner() {
 
   if (state === 'idle') return null;
 
-  const configs = {
+  // After the idle guard, state is one of the five keys below.
+  // TypeScript's flow-narrowing doesn't propagate past `return`, so cast explicitly.
+  type ActiveState = Exclude<typeof state, 'idle'>;
+  const configs: Record<ActiveState, { color: string; label: string; showSpinner: boolean }> = {
     scanning:     { color: '#F5A623', label: 'Scanning for adapter…', showSpinner: true  },
     connecting:   { color: '#F5A623', label: 'Connecting…',           showSpinner: true  },
     ready:        { color: '#7ED321', label: adapterName ?? 'OBD',    showSpinner: false },
@@ -24,7 +27,7 @@ export function OBDStatusBanner() {
     error:        { color: '#D0021B', label: errorMsg ?? 'OBD error', showSpinner: false },
   };
 
-  const cfg = configs[state] ?? configs.error;
+  const cfg = configs[state as ActiveState];
   const canShowLog = debugLog.length > 0;
 
   return (
