@@ -57,6 +57,17 @@ export const ALERT_COLORS: Record<AlertLevel, string> = {
   red: '#EF4444',
 };
 
+/** Map a 0–100 safety score to the same traffic-light bands the alerts use. */
+export function levelForScore(score: number): AlertLevel {
+  if (score >= 80) return 'green';
+  if (score >= 60) return 'yellow';
+  return 'red';
+}
+
+export function colorForScore(score: number): string {
+  return ALERT_COLORS[levelForScore(score)];
+}
+
 export function alertFromEvent(e: SafetyEvent): Alert {
   const isCrash = e.type === 'crash';
   return {

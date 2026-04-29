@@ -10,7 +10,7 @@ import {
   SafeAreaView,
 } from 'react-native';
 import { useSafetyStore } from '../safety/SafetyStore';
-import { Alert, ALERT_COLORS, alertFromEvent, alertFromWear, worstLevel } from '../safety/alerts';
+import { Alert, ALERT_COLORS, alertFromEvent, alertFromWear, colorForScore, worstLevel } from '../safety/alerts';
 import { selfDemoDriver } from '../safety/demoFixture';
 import { SafetyScore, TripRecord } from '../safety/types';
 
@@ -212,11 +212,7 @@ function TripRow({ trip }: { trip: TripRecord }) {
   );
 }
 
-function scoreColor(s: number): string {
-  if (s >= 80) return '#22C55E';
-  if (s >= 60) return '#F59E0B';
-  return '#EF4444';
-}
+const scoreColor = colorForScore;
 
 function Section({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
   return (

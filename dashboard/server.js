@@ -63,8 +63,9 @@ function send(res, status, body, headers = {}) {
 function serveStatic(req, res) {
   let urlPath = req.url.split('?')[0];
   if (urlPath === '/') urlPath = '/index.html';
-  const filePath = path.join(PUBLIC_DIR, urlPath);
-  if (!filePath.startsWith(PUBLIC_DIR)) {
+  const filePath = path.resolve(PUBLIC_DIR, '.' + urlPath);
+  const publicRoot = path.resolve(PUBLIC_DIR);
+  if (filePath !== publicRoot && !filePath.startsWith(publicRoot + path.sep)) {
     res.writeHead(403);
     res.end('forbidden');
     return;

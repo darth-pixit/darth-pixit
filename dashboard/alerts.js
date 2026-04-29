@@ -79,9 +79,16 @@ function worstLevel(alerts) {
   return 'green';
 }
 
+function levelForScore(score) {
+  if (score >= 80) return 'green';
+  if (score >= 60) return 'yellow';
+  return 'red';
+}
+
 module.exports = {
   ALERT_COLORS,
   levelForSeverity,
+  levelForScore,
   alertFromEvent,
   alertFromWear,
   worstLevel,
