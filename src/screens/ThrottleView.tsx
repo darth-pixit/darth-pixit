@@ -18,6 +18,7 @@ import { VehicleCfg } from '../obd/OBDManager';
 import { useAuth } from '../auth/AuthContext';
 import { useAutoConnect } from '../obd/useAutoConnect';
 import { VitalsScreen } from './VitalsScreen';
+import { DriverScoreScreen } from './DriverScoreScreen';
 
 const { width: SW } = Dimensions.get('window');
 const PAD = 24;
@@ -128,6 +129,7 @@ export function ThrottleView() {
   const [tripAvgKmL, setTripAvgKmL] = useState<number | null>(null);
   const [setupBlocked, setSetupBlocked] = useState(false);
   const [showVitals, setShowVitals] = useState(false);
+  const [showDriverScore, setShowDriverScore] = useState(false);
 
   // Refs so the accumulation interval always reads fresh values without
   // needing engineLoadPct/rpm/fuelRate/speed in its dependency array — those
@@ -505,6 +507,15 @@ export function ThrottleView() {
           </TouchableOpacity>
         </View>
 
+        {/* My Driving (safety score, alerts, trip history) */}
+        <TouchableOpacity
+          style={styles.vitalsBtn}
+          onPress={() => setShowDriverScore(true)}
+        >
+          <Text style={styles.vitalsText}>My Driving Score</Text>
+          <Text style={styles.vitalsChevron}></Text>
+        </TouchableOpacity>
+
         {/* All Vitals (full diagnostic readout) */}
         <TouchableOpacity
           style={styles.vitalsBtn}
@@ -530,6 +541,7 @@ export function ThrottleView() {
       </View>
 
       <VitalsScreen visible={showVitals} onClose={() => setShowVitals(false)} />
+      <DriverScoreScreen visible={showDriverScore} onClose={() => setShowDriverScore(false)} />
     </SafeAreaView>
   );
 }
