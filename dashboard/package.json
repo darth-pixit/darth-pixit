@@ -1,0 +1,11 @@
+{
+  "name": "darth-pixit-fleet-dashboard",
+  "version": "0.1.0",
+  "description": "Fleet safety dashboard demo unit. Reads seeded driver data from /api/* and renders multiple views with traffic-light alerts.",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {}
+}

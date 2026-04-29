@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Darth-Pixit Fleet Safety</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo-dot"></span>
+      <span>Darth-Pixit Fleet Safety</span>
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-view="overview">Overview</button>
+      <button class="tab" data-view="drivers">Drivers</button>
+      <button class="tab" data-view="alerts">Alerts feed</button>
+      <button class="tab" data-view="live">Live demo driver</button>
+    </nav>
+    <div class="status">
+      <span id="lastSync">…</span>
+    </div>
+  </header>
+
+  <main id="root"></main>
+
+  <template id="card-tpl">
+    <section class="card">
+      <header class="card-head"><h2></h2><p></p></header>
+      <div class="card-body"></div>
+    </section>
+  </template>
+
+  <script src="/app.js"></script>
+</body>
+</html>
