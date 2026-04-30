@@ -44,7 +44,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await confirmation.confirm(code);
   };
 
-  const signOut = () => auth().signOut();
+  const signOut = async () => {
+    try {
+      await auth().signOut();
+    } catch {
+      // Network or Firebase errors during sign-out are non-fatal — the user
+      // is already considered signed out locally once Firebase clears the
+      // cached credential, so we swallow the error rather than crashing.
+    }
+  };
 
   return (
     <AuthContext.Provider value={{ user, initializing, sendOTP, confirmOTP, signOut }}>

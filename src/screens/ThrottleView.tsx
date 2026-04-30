@@ -40,18 +40,18 @@ const BG_AMBER = '#3d1f00';
 const BG_GREEN = '#052e16';
 const AMBER_ANCHOR = 0.45;
 
-function lerpHex(a: string, b: string, t: number): string {
-  const ar = parseInt(a.slice(1, 3), 16);
-  const ag = parseInt(a.slice(3, 5), 16);
-  const ab = parseInt(a.slice(5, 7), 16);
-  const br = parseInt(b.slice(1, 3), 16);
-  const bg = parseInt(b.slice(3, 5), 16);
-  const bb = parseInt(b.slice(5, 7), 16);
-  const r = Math.round(ar + (br - ar) * t);
-  const g = Math.round(ag + (bg - ag) * t);
-  const c = Math.round(ab + (bb - ab) * t);
+function lerpHex(colorA: string, colorB: string, t: number): string {
+  const ar = parseInt(colorA.slice(1, 3), 16);
+  const ag = parseInt(colorA.slice(3, 5), 16);
+  const ab = parseInt(colorA.slice(5, 7), 16);
+  const br = parseInt(colorB.slice(1, 3), 16);
+  const bg = parseInt(colorB.slice(3, 5), 16);
+  const bb = parseInt(colorB.slice(5, 7), 16);
+  const red   = Math.round(ar + (br - ar) * t);
+  const green = Math.round(ag + (bg - ag) * t);
+  const blue  = Math.round(ab + (bb - ab) * t);
   const hex = (n: number) => n.toString(16).padStart(2, '0');
-  return `#${hex(r)}${hex(g)}${hex(c)}`;
+  return `#${hex(red)}${hex(green)}${hex(blue)}`;
 }
 
 // Build the background gradient as precomputed strip colors so we render

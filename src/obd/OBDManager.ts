@@ -836,6 +836,12 @@ export class OBDManager {
 
   private scheduleReconnect() {
     if (!this.active) return;
+    // A reconnect is already pending — don't stack a second one. Without this
+    // guard, a BLE error in pollLoop and onDisconnected firing simultaneously
+    // each call here, overwriting reconnectTimer and orphaning the first timer
+    // so stop() can never cancel it, while also double-incrementing the
+    // reconnectAttempt counter.
+    if (this.reconnectTimer !== null) return;
     this.polling = false;
     this.reconnectAttempt++;
     if (this.reconnectAttempt > 8) {

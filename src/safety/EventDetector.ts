@@ -336,11 +336,18 @@ export class EventDetector {
         }
       }
     } else if (this.openOverspeed) {
-      const durationMs = this.openOverspeed.lastOverT - this.openOverspeed.startedAt;
-      if (durationMs >= this.cfg.minOverspeedDurationS * 1000) {
-        this.closeEvent(this.openOverspeed, this.openOverspeed.lastOverT);
+      // Apply the same maxEventGapS merge window used for accel/brake/corner:
+      // a brief dip below the limit (speed bump, hill crest) should not split
+      // one continuous speeding episode into two separate events.
+      const gapMs = t - this.openOverspeed.lastOverT;
+      if (gapMs > this.cfg.maxEventGapS * 1000) {
+        const durationMs = this.openOverspeed.lastOverT - this.openOverspeed.startedAt;
+        if (durationMs >= this.cfg.minOverspeedDurationS * 1000) {
+          this.closeEvent(this.openOverspeed, this.openOverspeed.lastOverT);
+        }
+        this.openOverspeed = null;
       }
-      this.openOverspeed = null;
+      // else: inside merge window — keep open and wait for resumption or close.
     }
   }
 

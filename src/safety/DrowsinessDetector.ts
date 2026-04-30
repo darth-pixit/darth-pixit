@@ -60,10 +60,9 @@ import { GyroscopeSample, DrowsinessSignal, SafetyConfig, DEFAULT_SAFETY_CONFIG 
 
 export type DrowsinessListener = (signal: DrowsinessSignal) => void;
 
-/** Samples collected for one statistical window. */
-interface Window {
-  startT: number;
-  samples: number[]; // angular velocity magnitude values
+interface WindowSample {
+  t: number;
+  mag: number;
 }
 
 export class DrowsinessDetector {
@@ -76,8 +75,8 @@ export class DrowsinessDetector {
   private calibrationComplete = false;
   private baselineVariance = 0;
 
-  /** Rolling window for current variance computation (60 s). */
-  private window: Window = { startT: 0, samples: [] };
+  /** Rolling window for current variance computation (60 s), trimmed by timestamp. */
+  private window: WindowSample[] = [];
   private readonly WINDOW_MS = 60_000;
 
   /** Time of first high-variance observation (for sustained-duration check). */
@@ -121,25 +120,32 @@ export class DrowsinessDetector {
         this.baselineVariance = sampleVariance(this.calibrationSamples);
         this.calibrationComplete = true;
         // Pre-fill the rolling window with calibration samples so we
-        // have a full 60 s of history right after calibration.
-        this.window = { startT: this.calibrationStart, samples: [...this.calibrationSamples] };
+        // have a full 60 s of history right after calibration. We don't
+        // have per-sample timestamps from calibration, so synthesise them
+        // linearly — they'll be evicted naturally once real samples arrive.
+        const calibDt = calibMinMs / Math.max(1, this.calibrationSamples.length - 1);
+        this.window = this.calibrationSamples.map((m, i) => ({
+          t: this.calibrationStart + i * calibDt,
+          mag: m,
+        }));
       }
       return;
     }
 
-    // Rolling window update
-    if (this.window.startT === 0) this.window.startT = sample.t;
-    this.window.samples.push(mag);
-    // Evict samples older than WINDOW_MS.
-    const cutoffIndex = this.window.samples.length -
-      Math.round((this.WINDOW_MS / 1000) * 60); // approximate at 60 Hz
-    if (cutoffIndex > 0) {
-      this.window.samples = this.window.samples.slice(cutoffIndex);
+    // Rolling window update: push new sample, then evict anything older
+    // than WINDOW_MS using actual timestamps (not a sample-count approximation
+    // that breaks when the gyroscope rate differs from 60 Hz).
+    this.window.push({ t: sample.t, mag });
+    const cutoffT = sample.t - this.WINDOW_MS;
+    let firstKeep = 0;
+    while (firstKeep < this.window.length - 1 && this.window[firstKeep].t < cutoffT) {
+      firstKeep++;
     }
+    if (firstKeep > 0) this.window = this.window.slice(firstKeep);
 
-    if (this.window.samples.length < 60) return; // need at least 1 s of data
+    if (this.window.length < 60) return; // need at least 1 s of data
 
-    const currentVariance = sampleVariance(this.window.samples);
+    const currentVariance = sampleVariance(this.window.map((s) => s.mag));
     if (this.baselineVariance < 1e-6) return; // degenerate baseline
     const ratio = currentVariance / this.baselineVariance;
 
@@ -168,7 +174,7 @@ export class DrowsinessDetector {
     this.calibrationStart = 0;
     this.calibrationComplete = false;
     this.baselineVariance = 0;
-    this.window = { startT: 0, samples: [] };
+    this.window = [];
     this.elevatedSince = 0;
     this.lastAlertT = 0;
     this.currentSpeedKmH = 0;
