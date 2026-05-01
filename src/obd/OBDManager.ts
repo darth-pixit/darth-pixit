@@ -226,7 +226,10 @@ export class OBDManager {
     this.logBuf.push(line);
     if (this.logBuf.length > 80) this.logBuf.splice(0, this.logBuf.length - 80);
     this.data = { ...this.data, debugLog: [...this.logBuf] };
-    this.onUpdate?.(this.data);
+    // Do NOT call onUpdate here. The updated debugLog is already in this.data and
+    // will be included in the next emit() or emitCurrent() call. Calling onUpdate on
+    // every log line causes 8+ spurious Zustand notifications per poll cycle — 2 logs
+    // per PID (send + receive) × 4 PIDs — with no telemetry value change.
   }
 
   setUpdateHandler(fn: (data: OBDData) => void) {
@@ -497,9 +500,11 @@ export class OBDManager {
     // delay is bounded (~10 s worst-case on a vehicle with all PIDs unsupported).
     await this.probeExtendedPIDs();
 
-    // stop() may have been called while probeExtendedPIDs() was timing out.
-    // If so, bail — don't override the idle state or start a ghost poll loop.
-    if (!this.device) return;
+    // Bail if stop() was called OR if a disconnect fired scheduleReconnect()
+    // while probeExtendedPIDs() was timing out. scheduleReconnect() does NOT null
+    // this.device, so checking only !this.device would miss that case and start
+    // a ghost poll loop on a dead connection (also resetting reconnectAttempt to 0).
+    if (!this.active || !this.device || this.reconnectTimer !== null) return;
 
     this.reconnectAttempt = 0;
     this.polling = true;

@@ -121,7 +121,13 @@ const DEFAULT_VEHICLE: VehicleCfg = {
 };
 
 export function ThrottleView() {
-  const { engineLoadPct, rpm, state, fuelRateLPerH, speedKmH, start, stop } = useOBDStore();
+  const engineLoadPct = useOBDStore(s => s.engineLoadPct);
+  const rpm           = useOBDStore(s => s.rpm);
+  const state         = useOBDStore(s => s.state);
+  const fuelRateLPerH = useOBDStore(s => s.fuelRateLPerH);
+  const speedKmH      = useOBDStore(s => s.speedKmH);
+  const start         = useOBDStore(s => s.start);
+  const stop          = useOBDStore(s => s.stop);
   const { signOut } = useAuth();
   const { autoConnectState, completeSetup } = useAutoConnect(DEFAULT_VEHICLE);
   const [isDemoMode, setIsDemoMode] = useState(false);
@@ -460,24 +466,39 @@ export function ThrottleView() {
 
         {/* Live stats row */}
         <View style={styles.statsRow}>
-          {rpm != null ? (
-            <View style={styles.statBlock}>
-              <Text style={styles.statVal}>{Math.round(rpm).toLocaleString()}</Text>
-              <Text style={styles.statLbl}>RPM</Text>
-            </View>
-          ) : null}
-          {speedKmH != null ? (
-            <View style={styles.statBlock}>
-              <Text style={styles.statVal}>{Math.round(speedKmH)}</Text>
-              <Text style={styles.statLbl}>km/h</Text>
-            </View>
-          ) : null}
-          {fuelRateLPerH != null && state === 'ready' ? (
-            <View style={styles.statBlock}>
-              <Text style={styles.statVal}>{fuelRateLPerH.toFixed(1)}</Text>
-              <Text style={styles.statLbl}>L/h</Text>
-            </View>
-          ) : null}
+          {isDemoMode ? (
+            <>
+              <View style={styles.statBlock}>
+                <Text style={styles.statVal}>{Math.round(20 + demoThrottle * 60)}</Text>
+                <Text style={styles.statLbl}>km/h</Text>
+              </View>
+              <View style={styles.statBlock}>
+                <Text style={styles.statVal}>{(0.8 + demoThrottle * 9).toFixed(1)}</Text>
+                <Text style={styles.statLbl}>L/h</Text>
+              </View>
+            </>
+          ) : (
+            <>
+              {rpm != null ? (
+                <View style={styles.statBlock}>
+                  <Text style={styles.statVal}>{Math.round(rpm).toLocaleString()}</Text>
+                  <Text style={styles.statLbl}>RPM</Text>
+                </View>
+              ) : null}
+              {speedKmH != null ? (
+                <View style={styles.statBlock}>
+                  <Text style={styles.statVal}>{Math.round(speedKmH)}</Text>
+                  <Text style={styles.statLbl}>km/h</Text>
+                </View>
+              ) : null}
+              {fuelRateLPerH != null && state === 'ready' ? (
+                <View style={styles.statBlock}>
+                  <Text style={styles.statVal}>{fuelRateLPerH.toFixed(1)}</Text>
+                  <Text style={styles.statLbl}>L/h</Text>
+                </View>
+              ) : null}
+            </>
+          )}
           {!hasLiveData ? (
             <Text style={styles.noDataHint}>Live RPM, speed & fuel rate appear here</Text>
           ) : null}
@@ -531,7 +552,7 @@ export function ThrottleView() {
           onPress={() => {
             Alert.alert('Sign out', 'Are you sure you want to sign out?', [
               { text: 'Cancel', style: 'cancel' },
-              { text: 'Sign out', style: 'destructive', onPress: signOut },
+              { text: 'Sign out', style: 'destructive', onPress: () => { stop(); signOut(); } },
             ]);
           }}
         >
