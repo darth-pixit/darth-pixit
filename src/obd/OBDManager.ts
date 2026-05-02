@@ -688,15 +688,20 @@ export class OBDManager {
       try {
         // Emit after every high-priority PID so the UI updates as each value
         // arrives rather than waiting for a full round of 4 PIDs to complete.
+        // computeFuelRate is only called after the MAF PID (last in HIGH_PIDS)
+        // so it always sees the freshest air-flow reading. Calling it after RPM
+        // or Speed would silently reuse a stale MAF from the previous cycle.
         for (const pid of HIGH_PIDS) {
           const raw = await this.send(pid, 1000);
           this.applyPID(pid, raw);
-          this.computeFuelRate();
+          if (pid === '0110') this.computeFuelRate(); // MAF just arrived
           this.emitCurrent();
         }
         const lowPid = LOW_PIDS[this.lowPidIndex % LOW_PIDS.length];
         const raw = await this.send(lowPid, 1000);
         this.applyPID(lowPid, raw);
+        // Re-run fuel calculation when MAP or IAT land — they feed the fallback.
+        if (lowPid === '010B' || lowPid === '010F') this.computeFuelRate();
         this.lowPidIndex++;
         this.emitCurrent();
       } catch (e: any) {
@@ -836,6 +841,11 @@ export class OBDManager {
 
   private scheduleReconnect() {
     if (!this.active) return;
+    // Guard: onDisconnected and the poll-loop BLE error handler both fire for
+    // the same disconnect event. Without this check the second call overwrites
+    // this.reconnectTimer, orphaning the first timer so stop() can never cancel
+    // it — and it eventually fires connect() even after the user pressed Stop.
+    if (this.reconnectTimer !== null) return;
     this.polling = false;
     this.reconnectAttempt++;
     if (this.reconnectAttempt > 8) {

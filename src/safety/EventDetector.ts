@@ -440,7 +440,7 @@ export class EventDetector {
   private closeEvent(open: OpenEvent, endT: number): void {
     const severity = computeSeverity(open.type, open.peak, this.cfg);
     const ev: SafetyEvent = {
-      id: `ev_${Date.now()}_${++this.eventIdCounter}`,
+      id: `ev_${open.startedAt}_${++this.eventIdCounter}`,
       type: open.type,
       startedAt: open.startedAt,
       endedAt: endT,

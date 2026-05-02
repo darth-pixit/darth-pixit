@@ -27,7 +27,9 @@ export function PhoneScreen({ onConfirmation }: Props) {
   const handleSend = async () => {
     const trimmed = phone.trim();
     const formatted = trimmed.startsWith('+') ? trimmed : `+${trimmed}`;
-    if (formatted.length < 8) {
+    // E.164 format: + followed by 7–15 digits (no spaces/dashes).
+    const digits = formatted.slice(1).replace(/[\s\-]/g, '');
+    if (!/^\d+$/.test(digits) || digits.length < 7 || digits.length > 15) {
       Alert.alert('Invalid number', 'Please enter a valid phone number with country code (e.g. +91 9876543210).');
       return;
     }

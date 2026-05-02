@@ -27,6 +27,20 @@ export interface DemoDriver {
   };
 }
 
+// Fixed pin locations for demo events — deterministic so alert list keys are
+// stable across renders and the "deterministic fixture" comment stays true.
+const DEMO_PINS: Array<{ lat: number; lng: number }> = [
+  { lat: 12.9716, lng: 77.5946 },
+  { lat: 12.9730, lng: 77.5960 },
+  { lat: 12.9745, lng: 77.5975 },
+  { lat: 12.9758, lng: 77.5988 },
+  { lat: 12.9770, lng: 77.5999 },
+  { lat: 12.9782, lng: 77.6010 },
+  { lat: 12.9793, lng: 77.6022 },
+  { lat: 12.9804, lng: 77.6033 },
+];
+let _pinIdx = 0; // reset in buildDemoFleet() so each build yields the same pin order
+
 function ev(
   id: string,
   type: SafetyEvent['type'],
@@ -34,6 +48,7 @@ function ev(
   peak: number,
   startedAt: number,
 ): SafetyEvent {
+  const location = DEMO_PINS[_pinIdx++ % DEMO_PINS.length];
   return {
     id,
     type,
@@ -41,7 +56,7 @@ function ev(
     peak,
     startedAt,
     endedAt: startedAt + 1500,
-    location: { lat: 12.97 + Math.random() * 0.02, lng: 77.59 + Math.random() * 0.02 },
+    location,
   };
 }
 
@@ -80,6 +95,7 @@ function mirroredAppDemoReadout(): DemoDriver['liveDemoReadout'] {
 }
 
 export function buildDemoFleet(): DemoDriver[] {
+  _pinIdx = 0; // deterministic pin assignment on every build
   return [
     {
       id: 'demo-001',

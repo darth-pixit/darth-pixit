@@ -40,7 +40,7 @@ export function OBDStatusBanner() {
         {state === 'ready' && fuelCalcMethod !== 'none' && (
           <Text style={styles.method}>{fuelCalcMethod.toUpperCase()}</Text>
         )}
-        {canShowLog && state === 'error' && (
+        {canShowLog && (state === 'error' || state === 'reconnecting') && (
           <TouchableOpacity onPress={() => setShowLog(true)} hitSlop={8}>
             <Text style={styles.logBtn}>LOG</Text>
           </TouchableOpacity>
