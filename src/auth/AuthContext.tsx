@@ -35,7 +35,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return unsubscribe;
   }, []);
 
-  const sendOTP = (phone: string) => auth().signInWithPhoneNumber(phone);
+  const sendOTP = async (phone: string) => {
+    try {
+      return await auth().signInWithPhoneNumber(phone);
+    } catch (e: any) {
+      // Firebase throws this on Android when the project is on the free Spark plan.
+      // Fix: upgrade to Blaze (pay-as-you-go) in the Firebase Console.
+      if (e?.code === 'auth/billing-not-enabled') {
+        const friendlyError = new Error(
+          'SMS sign-in is not available right now. Please try again later or contact support.',
+        );
+        (friendlyError as any).code = e.code;
+        throw friendlyError;
+      }
+      throw e;
+    }
+  };
 
   const confirmOTP = async (
     confirmation: FirebaseAuthTypes.ConfirmationResult,
