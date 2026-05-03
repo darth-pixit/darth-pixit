@@ -36,8 +36,8 @@ export function OTPScreen({ confirmation, phone, onBack }: Props) {
   const inputRefs = useRef<Array<TextInput | null>>(Array(CODE_LENGTH).fill(null));
 
   useEffect(() => {
-    // Auto-focus first box on mount
-    setTimeout(() => inputRefs.current[0]?.focus(), 100);
+    const id = setTimeout(() => inputRefs.current[0]?.focus(), 100);
+    return () => clearTimeout(id);
   }, []);
 
   const handleChange = (text: string, index: number) => {

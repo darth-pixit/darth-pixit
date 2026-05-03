@@ -494,7 +494,9 @@ export function ThrottleView() {
             // handles the first connection; the user gets here by tapping Disconnect
             // or when the adapter can't be found after all retries.
             <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={() => start(DEFAULT_VEHICLE)}>
-              <Text style={styles.btnText}>{state === 'error' ? 'Retry' : 'Reconnect'}</Text>
+              <Text style={styles.btnText}>
+                {state === 'error' ? 'Retry' : state === 'idle' ? 'Connect OBD Adapter' : 'Reconnect'}
+              </Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity

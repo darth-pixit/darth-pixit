@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ScrollView,
   Modal,
+  Platform,
 } from 'react-native';
 import { useOBDStore } from './OBDStore';
 
@@ -113,7 +114,7 @@ const styles = StyleSheet.create({
   logLine: {
     color: '#CCC',
     fontSize: 11,
-    fontFamily: 'Courier',
+    fontFamily: Platform.select({ ios: 'Courier', android: 'monospace' }),
     marginBottom: 2,
   },
 });

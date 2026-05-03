@@ -308,12 +308,10 @@ export class EventDetector {
     const absoluteLimit = this.cfg.absoluteSpeedLimitKmH;
     const grace = this.cfg.overspeedBufferKmH;
 
-    let effectiveLimit = absoluteLimit;
-    if (zoneLimit !== null && zoneLimit + grace < effectiveLimit) {
-      effectiveLimit = zoneLimit + grace;
-    } else {
-      effectiveLimit = absoluteLimit + grace;
-    }
+    const effectiveLimit =
+      zoneLimit !== null && zoneLimit < absoluteLimit
+        ? zoneLimit + grace
+        : absoluteLimit + grace;
 
     const excess = speedKmH - effectiveLimit;
 

@@ -234,6 +234,10 @@ export class OBDManager {
   }
 
   async start(vehicle: VehicleCfg) {
+    // Ignore duplicate calls while a scan or live session is already running.
+    // Allow re-entry from 'error' (explicit Retry) and 'idle' (first launch).
+    const s = this.data.state;
+    if (this.active && s !== 'idle' && s !== 'error') return;
     this.active = true;
     this.vehicle = vehicle;
     this.reconnectAttempt = 0;
@@ -836,6 +840,14 @@ export class OBDManager {
 
   private scheduleReconnect() {
     if (!this.active) return;
+    // Guard against concurrent calls (e.g. pollLoop BLE error + onDisconnected both
+    // firing for the same disconnect). Clear the previous timer and undo its attempt
+    // increment so one physical disconnect only costs one retry slot.
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+      this.reconnectAttempt = Math.max(0, this.reconnectAttempt - 1);
+    }
     this.polling = false;
     this.reconnectAttempt++;
     if (this.reconnectAttempt > 8) {
