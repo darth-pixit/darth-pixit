@@ -225,8 +225,11 @@ export class OBDManager {
     console.log('[OBD]', line);
     this.logBuf.push(line);
     if (this.logBuf.length > 80) this.logBuf.splice(0, this.logBuf.length - 80);
-    this.data = { ...this.data, debugLog: [...this.logBuf] };
-    this.onUpdate?.(this.data);
+    // Do NOT call onUpdate here. emit() and emitCurrent() both spread
+    // this.logBuf into debugLog, so subscribers get the full log on every
+    // real data update (4×/s during polling). Emitting per log line inflates
+    // the update rate to ~32×/s, polluting the safety engine's speed
+    // derivative and causing excess React re-renders.
   }
 
   setUpdateHandler(fn: (data: OBDData) => void) {
@@ -404,6 +407,14 @@ export class OBDManager {
 
   private async onConnected() {
     if (!this.device) return;
+    // If stop() was called while connect() was still in-flight, bail now
+    // rather than discovering services, probing, and entering 'ready' state
+    // for a session the user explicitly ended.
+    if (!this.active) {
+      this.device.cancelConnection().catch(() => {});
+      this.device = null;
+      return;
+    }
     this.log('connected; discovering services');
     await this.device.discoverAllServicesAndCharacteristics();
 
@@ -602,6 +613,7 @@ export class OBDManager {
 
   private async probeEcu(): Promise<boolean> {
     for (let attempt = 0; attempt < 2; attempt++) {
+      if (!this.active || !this.device) return false;
       this.log(`probe 0100 attempt ${attempt + 1}`);
       try {
         const resp = await this.send('0100', 15000);
@@ -835,7 +847,11 @@ export class OBDManager {
   }
 
   private scheduleReconnect() {
-    if (!this.active) return;
+    // Guard: onDisconnected and a pollLoop BLE error can both fire within
+    // milliseconds of each other. The second call must be a no-op —
+    // otherwise reconnectAttempt inflates at 2× rate and the terminal
+    // error fires after half as many actual disconnects as intended.
+    if (!this.active || this.reconnectTimer !== null) return;
     this.polling = false;
     this.reconnectAttempt++;
     if (this.reconnectAttempt > 8) {
@@ -857,8 +873,9 @@ export class OBDManager {
 
   private emitCurrent() {
     // Spread to a new object so Zustand's Object.is guard always sees a fresh
-    // reference and triggers re-renders, regardless of whether log() ran first.
-    this.data = { ...this.data };
+    // reference, and pull in the latest logBuf so debugLog stays current
+    // without needing log() to emit.
+    this.data = { ...this.data, debugLog: [...this.logBuf] };
     this.onUpdate?.(this.data);
   }
 }
