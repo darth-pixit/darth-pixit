@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   StatusBar,
   SafeAreaView,
 } from 'react-native';
+import { useShallow } from 'zustand/react/shallow';
 import { useOBDStore } from '../obd/OBDStore';
 import { OBDData, SeatbeltStatus } from '../obd/OBDManager';
 
@@ -349,8 +350,45 @@ function buildSections(d: OBDData): VitalSection[] {
 }
 
 export function VitalsScreen({ visible, onClose }: VitalsScreenProps) {
-  const data = useOBDStore();
-  const sections = buildSections(data);
+  // Subscribe only to the fields buildSections reads, with shallow comparison
+  // so we only re-render when a relevant value changes. useOBDStore() with no
+  // selector re-renders on every OBD poll (~4×/sec) even when the modal is hidden.
+  const data = useOBDStore(useShallow((s) => ({
+    state: s.state,
+    fuelCalcMethod: s.fuelCalcMethod,
+    rpm: s.rpm,
+    speedKmH: s.speedKmH,
+    engineLoadPct: s.engineLoadPct,
+    fuelRateLPerH: s.fuelRateLPerH,
+    fuelLevelPct: s.fuelLevelPct,
+    coolantC: s.coolantC,
+    oilTempC: s.oilTempC,
+    batteryVolts: s.batteryVolts,
+    throttlePosPct: s.throttlePosPct,
+    fuelPressureKPa: s.fuelPressureKPa,
+    iatC: s.iatC,
+    ambientTempC: s.ambientTempC,
+    mafGPerS: s.mafGPerS,
+    mapKPa: s.mapKPa,
+    shortFuelTrim1Pct: s.shortFuelTrim1Pct,
+    longFuelTrim1Pct: s.longFuelTrim1Pct,
+    timingAdvanceDeg: s.timingAdvanceDeg,
+    absoluteLoadPct: s.absoluteLoadPct,
+    baroPressureKPa: s.baroPressureKPa,
+    milOn: s.milOn,
+    dtcCount: s.dtcCount,
+    engineRunTimeSec: s.engineRunTimeSec,
+    distanceSinceClearedKm: s.distanceSinceClearedKm,
+    timeSinceClearedMin: s.timeSinceClearedMin,
+    distanceMilOnKm: s.distanceMilOnKm,
+    timeMilOnMin: s.timeMilOnMin,
+    seatbeltStatus: s.seatbeltStatus,
+    tpmsFLKpa: s.tpmsFLKpa,
+    tpmsFRKpa: s.tpmsFRKpa,
+    tpmsRLKpa: s.tpmsRLKpa,
+    tpmsRRKpa: s.tpmsRRKpa,
+  })));
+  const sections = useMemo(() => buildSections(data as OBDData), [data]);
   const isLive = data.state === 'ready';
 
   return (

@@ -289,9 +289,17 @@ export function ThrottleView() {
   // right edge and grows leftward as the driver applies more throttle.
   const fillWidth = anim.interpolate({ inputRange: [0, 1], outputRange: [0, TRACK_W], extrapolate: 'clamp' });
   const thumbLeft = anim.interpolate({ inputRange: [0, 1], outputRange: [TRACK_W - THUMB_W, 0], extrapolate: 'clamp' });
+  // Hard zone-boundary steps so the fill color always matches the zone the
+  // driver is in. A smooth green→amber gradient inside the eco zone would
+  // be visually misleading (fill would be amber-ish at throttle=0.30).
   const fillColor = anim.interpolate({
-    inputRange: [0, ECO_LIMIT, MOD_LIMIT, 1],
-    outputRange: ['#22C55E', '#F59E0B', '#EF4444', '#EF4444'],
+    inputRange: [
+      0,
+      ECO_LIMIT - 0.001, ECO_LIMIT + 0.001,
+      MOD_LIMIT - 0.001, MOD_LIMIT + 0.001,
+      1,
+    ],
+    outputRange: ['#22C55E', '#22C55E', '#F59E0B', '#F59E0B', '#EF4444', '#EF4444'],
     extrapolate: 'clamp',
   });
   // Badge tries to sit centered over the thumb, clamped so it doesn't overflow

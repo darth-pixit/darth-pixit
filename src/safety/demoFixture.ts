@@ -63,15 +63,16 @@ function score(
   };
 }
 
-const NOW = Date.now();
+// NOT a module-level constant — computed inside each builder so timestamps
+// are always relative to when the screen is opened, not when the module loaded.
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 
 function mirroredAppDemoReadout(): DemoDriver['liveDemoReadout'] {
-  // Match ThrottleView demo: sine wave centered at 0.45 with ±0.4 amplitude.
-  // The dashboard sampling once per second is fine for visualization.
+  // Match ThrottleView demo exactly: center=0.38, amplitude=0.38, rate=0.07 rad/frame @ 10fps.
+  // Convert to a time-based equivalent: 0.07 rad/frame × 10 fps = 0.7 rad/s.
   const t = Date.now() / 1000;
-  const throttle = Math.max(0, Math.min(1, 0.45 + 0.4 * Math.sin(t * 0.6)));
+  const throttle = Math.max(0, Math.min(1, 0.38 + 0.38 * Math.sin(t * 0.7)));
   return {
     throttle,
     speedKmH: 20 + throttle * 60,
@@ -80,6 +81,7 @@ function mirroredAppDemoReadout(): DemoDriver['liveDemoReadout'] {
 }
 
 export function buildDemoFleet(): DemoDriver[] {
+  const NOW = Date.now();
   return [
     {
       id: 'demo-001',

@@ -238,13 +238,39 @@ export class EventDetector {
   /**
    * Close all open events (trip ending, etc.). Useful so a trip doesn't
    * end with an unfinished event still "open" in memory.
+   *
+   * Minimum-duration guards are enforced here just as they are in the
+   * normal close path — an event that opened 50 ms before trip end does
+   * not meet the threshold and is silently dropped.
    */
   flush(t: number): void {
-    if (this.openAccel) { this.closeEvent(this.openAccel, t); this.openAccel = null; }
-    if (this.openBrake) { this.closeEvent(this.openBrake, t); this.openBrake = null; }
-    if (this.openCorner) { this.closeEvent(this.openCorner, t); this.openCorner = null; }
-    if (this.openOverspeed) { this.closeEvent(this.openOverspeed, t); this.openOverspeed = null; }
-    if (this.openDistracted) { this.closeEvent(this.openDistracted, t); this.openDistracted = null; }
+    const minDurMs = this.cfg.minEventDurationS * 1000;
+    if (this.openAccel) {
+      if (t - this.openAccel.startedAt >= minDurMs) this.closeEvent(this.openAccel, t);
+      this.openAccel = null;
+    }
+    if (this.openBrake) {
+      if (t - this.openBrake.startedAt >= minDurMs) this.closeEvent(this.openBrake, t);
+      this.openBrake = null;
+    }
+    if (this.openCorner) {
+      if (t - this.openCorner.startedAt >= minDurMs) this.closeEvent(this.openCorner, t);
+      this.openCorner = null;
+    }
+    if (this.openOverspeed) {
+      const durMs = this.openOverspeed.lastOverT - this.openOverspeed.startedAt;
+      if (durMs >= this.cfg.minOverspeedDurationS * 1000) {
+        this.closeEvent(this.openOverspeed, this.openOverspeed.lastOverT);
+      }
+      this.openOverspeed = null;
+    }
+    if (this.openDistracted) {
+      const durMs = this.openDistracted.lastOverT - this.openDistracted.startedAt;
+      if (durMs >= this.cfg.distractedMinDurationS * 1000) {
+        this.closeEvent(this.openDistracted, this.openDistracted.lastOverT);
+      }
+      this.openDistracted = null;
+    }
   }
 
   reset(): void {

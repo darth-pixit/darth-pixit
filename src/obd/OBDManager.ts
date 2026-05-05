@@ -900,11 +900,12 @@ function parseHexResponse(raw: string, headerLen = 2): number[] | null {
     if (m) parts = m;
   }
   if (parts.length <= headerLen) return null;
-  try {
-    return parts.slice(headerLen).map((h) => parseInt(h, 16));
-  } catch {
-    return null;
-  }
+  // parseInt never throws — it returns NaN for non-hex tokens instead.
+  // A NaN byte would pass `!= null` checks downstream and corrupt fields
+  // like rpm and speed, so reject the entire response if any byte is bad.
+  const bytes = parts.slice(headerLen).map((h) => parseInt(h, 16));
+  if (bytes.some(isNaN)) return null;
+  return bytes;
 }
 
 function sleep(ms: number) {
