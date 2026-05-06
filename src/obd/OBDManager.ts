@@ -318,6 +318,7 @@ export class OBDManager {
   }
 
   private async connect() {
+    if (!this.active) return;
     if (!(await this.waitForPoweredOn())) return;
 
     if (this.cachedDeviceId) {
@@ -836,6 +837,13 @@ export class OBDManager {
 
   private scheduleReconnect() {
     if (!this.active) return;
+    // A timer is already queued — don't double-schedule. The existing timer
+    // will fire at the right time. Without this guard, a BLE error in pollLoop
+    // and the onDisconnected callback can both call scheduleReconnect() within
+    // milliseconds of each other, leaking the first timer and producing two
+    // concurrent connect() → pollLoop() pairs that corrupt the single
+    // responseResolve slot.
+    if (this.reconnectTimer !== null) return;
     this.polling = false;
     this.reconnectAttempt++;
     if (this.reconnectAttempt > 8) {

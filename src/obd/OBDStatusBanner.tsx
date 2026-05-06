@@ -10,8 +10,41 @@ import {
 } from 'react-native';
 import { useOBDStore } from './OBDStore';
 
+/**
+ * The debug log modal subscribes to debugLog separately so that the 30+
+ * log writes per second during active polling don't re-render the banner
+ * label/spinner. Only this component re-renders on each log append, and
+ * it's invisible unless the user tapped LOG while in error state.
+ */
+function OBDDebugLogModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const debugLog = useOBDStore((s) => s.debugLog);
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modal}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>OBD Debug Log</Text>
+          <TouchableOpacity onPress={onClose}>
+            <Text style={styles.modalClose}>Close</Text>
+          </TouchableOpacity>
+        </View>
+        <ScrollView style={styles.logScroll}>
+          {debugLog.map((line, i) => (
+            <Text key={i} style={styles.logLine} selectable>
+              {line}
+            </Text>
+          ))}
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+}
+
 export function OBDStatusBanner() {
-  const { state, adapterName, fuelCalcMethod, errorMsg, debugLog } = useOBDStore();
+  // Intentionally excludes debugLog — see OBDDebugLogModal above.
+  const state = useOBDStore((s) => s.state);
+  const adapterName = useOBDStore((s) => s.adapterName);
+  const fuelCalcMethod = useOBDStore((s) => s.fuelCalcMethod);
+  const errorMsg = useOBDStore((s) => s.errorMsg);
   const [showLog, setShowLog] = useState(false);
 
   if (state === 'idle') return null;
@@ -25,7 +58,6 @@ export function OBDStatusBanner() {
   };
 
   const cfg = configs[state] ?? configs.error;
-  const canShowLog = debugLog.length > 0;
 
   return (
     <>
@@ -40,30 +72,14 @@ export function OBDStatusBanner() {
         {state === 'ready' && fuelCalcMethod !== 'none' && (
           <Text style={styles.method}>{fuelCalcMethod.toUpperCase()}</Text>
         )}
-        {canShowLog && state === 'error' && (
+        {state === 'error' && (
           <TouchableOpacity onPress={() => setShowLog(true)} hitSlop={8}>
             <Text style={styles.logBtn}>LOG</Text>
           </TouchableOpacity>
         )}
       </View>
 
-      <Modal visible={showLog} animationType="slide" onRequestClose={() => setShowLog(false)}>
-        <View style={styles.modal}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>OBD Debug Log</Text>
-            <TouchableOpacity onPress={() => setShowLog(false)}>
-              <Text style={styles.modalClose}>Close</Text>
-            </TouchableOpacity>
-          </View>
-          <ScrollView style={styles.logScroll}>
-            {debugLog.map((line, i) => (
-              <Text key={i} style={styles.logLine} selectable>
-                {line}
-              </Text>
-            ))}
-          </ScrollView>
-        </View>
-      </Modal>
+      <OBDDebugLogModal visible={showLog} onClose={() => setShowLog(false)} />
     </>
   );
 }
