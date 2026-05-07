@@ -68,10 +68,10 @@ const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 
 function mirroredAppDemoReadout(): DemoDriver['liveDemoReadout'] {
-  // Match ThrottleView demo: sine wave centered at 0.45 with ±0.4 amplitude.
-  // The dashboard sampling once per second is fine for visualization.
+  // ThrottleView demo: Math.sin(frame * 0.07) * 0.38 + 0.38 at 10 fps
+  // → angular velocity = 0.7 rad/s, center = 0.38, amplitude = 0.38.
   const t = Date.now() / 1000;
-  const throttle = Math.max(0, Math.min(1, 0.45 + 0.4 * Math.sin(t * 0.6)));
+  const throttle = Math.max(0, Math.min(1, 0.38 + 0.38 * Math.sin(t * 0.7)));
   return {
     throttle,
     speedKmH: 20 + throttle * 60,

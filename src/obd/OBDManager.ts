@@ -638,6 +638,7 @@ export class OBDManager {
       outerReject = rej;
     });
     const t = setTimeout(() => {
+      this.rxBuffer = '';
       this.responseResolve = null;
       this.log(`timeout (${timeoutMs}ms) waiting for: ${cmd}`);
       outerReject(new Error('timeout'));

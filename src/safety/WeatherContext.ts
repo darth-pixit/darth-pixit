@@ -41,18 +41,18 @@
  *  UI can offer "all conditions" vs "dry only" score comparisons.
  *
  * =============================================================
- *  WMO code → condition mapping (simplified)
+ *  WMO code → condition → threshold factor
  * =============================================================
- *  0–3:   clear / overcast      → 1.00
- *  45–48: fog                   → 0.92  (visibility, not grip)
- *  51–55: drizzle               → 0.90
- *  56–57: freezing drizzle      → 0.75
- *  61–65: rain                  → 0.85
- *  66–67: freezing rain         → 0.70
- *  71–77: snow                  → 0.70
- *  80–82: showers               → 0.85
- *  85–86: snow showers          → 0.72
- *  95–99: thunderstorm          → 0.80
+ *  0–3, 4–9:   clear / overcast  → 1.00
+ *  45–48:      fog               → 0.92  (visibility, not grip)
+ *  51–55:      light_rain        → 0.88  (drizzle)
+ *  56–57:      heavy_rain        → 0.80  (freezing drizzle)
+ *  61–65:      light_rain        → 0.88  (moderate rain)
+ *  66–67:      heavy_rain        → 0.80  (freezing rain)
+ *  71–77:      snow              → 0.70
+ *  80–82:      light_rain        → 0.88  (showers)
+ *  85–86:      snow              → 0.70  (snow showers)
+ *  95–99:      thunderstorm      → 0.80
  */
 
 import {
@@ -64,7 +64,7 @@ import {
 
 const OPEN_METEO_URL =
   'https://api.open-meteo.com/v1/forecast' +
-  '?hourly=precipitation&current=precipitation,weathercode' +
+  '?current=precipitation,weather_code' +
   '&forecast_days=1';
 
 /** Cache TTL: re-fetch only if the last fetch was > 30 min ago. */
@@ -140,13 +140,13 @@ export class WeatherContext {
       const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
       if (!resp.ok) return null;
       const json = await resp.json() as {
-        current?: { precipitation?: number; weathercode?: number };
+        current?: { precipitation?: number; weather_code?: number };
       };
       const current = json?.current;
       if (!current) return null;
 
       const precipMmH = current.precipitation ?? 0;
-      const code = current.weathercode ?? 0;
+      const code = current.weather_code ?? 0;
       const condition = wmoCodeToCondition(code);
       const thresholdFactor = conditionToThresholdFactor(condition);
 

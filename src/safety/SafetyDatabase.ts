@@ -111,7 +111,11 @@ export class SafetyDatabase {
   }
 
   async deleteTrip(id: string): Promise<void> {
+    const trip = await this.loadTrip(id);
     await this.kv.removeItem(KEY_TRIP(id));
+    if (trip?.crash) {
+      await this.kv.removeItem(KEY_CRASH(trip.crash.id)).catch(() => {});
+    }
     const index = await this.loadTripIndex();
     const next = index.filter((i) => i !== id);
     if (next.length !== index.length) {
