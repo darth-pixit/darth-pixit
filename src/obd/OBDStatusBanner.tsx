@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,12 +7,14 @@ import {
   TouchableOpacity,
   ScrollView,
   Modal,
+  Platform,
 } from 'react-native';
 import { useOBDStore } from './OBDStore';
 
 export function OBDStatusBanner() {
   const { state, adapterName, fuelCalcMethod, errorMsg, debugLog } = useOBDStore();
   const [showLog, setShowLog] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
 
   if (state === 'idle') return null;
 
@@ -55,9 +57,13 @@ export function OBDStatusBanner() {
               <Text style={styles.modalClose}>Close</Text>
             </TouchableOpacity>
           </View>
-          <ScrollView style={styles.logScroll}>
-            {debugLog.map((line, i) => (
-              <Text key={i} style={styles.logLine} selectable>
+          <ScrollView
+            ref={scrollRef}
+            style={styles.logScroll}
+            onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
+          >
+            {debugLog.map((line) => (
+              <Text key={line} style={styles.logLine} selectable>
                 {line}
               </Text>
             ))}
@@ -113,7 +119,7 @@ const styles = StyleSheet.create({
   logLine: {
     color: '#CCC',
     fontSize: 11,
-    fontFamily: 'Courier',
+    fontFamily: Platform.select({ ios: 'Courier', android: 'monospace' }),
     marginBottom: 2,
   },
 });

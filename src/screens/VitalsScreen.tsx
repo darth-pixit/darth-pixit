@@ -184,6 +184,7 @@ function buildSections(d: OBDData): VitalSection[] {
           value: tirePsi(d.tpmsFLKpa),
           unit: 'psi',
           severity: tireSeverity(d.tpmsFLKpa),
+          hint: 'Normal 29–36 psi. Most cars don\'t expose TPMS via OBD.',
         },
         {
           label: 'Tire FR',

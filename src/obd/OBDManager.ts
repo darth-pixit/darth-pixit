@@ -225,8 +225,11 @@ export class OBDManager {
     console.log('[OBD]', line);
     this.logBuf.push(line);
     if (this.logBuf.length > 80) this.logBuf.splice(0, this.logBuf.length - 80);
+    // Update this.data so the next emit/emitCurrent picks up the fresh log, but
+    // don't call onUpdate here — log messages during the poll loop would otherwise
+    // fire ~8 extra Zustand updates per cycle (2 per PID × 4 PIDs) with no new
+    // sensor data, causing unnecessary React re-renders.
     this.data = { ...this.data, debugLog: [...this.logBuf] };
-    this.onUpdate?.(this.data);
   }
 
   setUpdateHandler(fn: (data: OBDData) => void) {
@@ -502,6 +505,7 @@ export class OBDManager {
     if (!this.device) return;
 
     this.reconnectAttempt = 0;
+    this.tickCount = 0;
     this.polling = true;
     this.emit({ state: 'ready', errorMsg: null });
     this.pollLoop();
@@ -639,6 +643,9 @@ export class OBDManager {
     });
     const t = setTimeout(() => {
       this.responseResolve = null;
+      // Also drain any partial data that arrived before the timeout so the
+      // next send() doesn't read a stale '>' fragment as its own response.
+      this.rxBuffer = '';
       this.log(`timeout (${timeoutMs}ms) waiting for: ${cmd}`);
       outerReject(new Error('timeout'));
     }, timeoutMs);
@@ -900,11 +907,10 @@ function parseHexResponse(raw: string, headerLen = 2): number[] | null {
     if (m) parts = m;
   }
   if (parts.length <= headerLen) return null;
-  try {
-    return parts.slice(headerLen).map((h) => parseInt(h, 16));
-  } catch {
-    return null;
-  }
+  const bytes = parts.slice(headerLen).map((h) => parseInt(h, 16));
+  // parseInt returns NaN for empty strings or non-hex input that slipped through.
+  // Treat any NaN byte as a malformed response.
+  return bytes.some((b) => !Number.isFinite(b)) ? null : bytes;
 }
 
 function sleep(ms: number) {
