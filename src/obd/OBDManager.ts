@@ -239,6 +239,10 @@ export class OBDManager {
     this.reconnectAttempt = 0;
     this.tickCount = 0;
     this.logBuf = [];
+    // Clear stale error from a previous session so callers (e.g. Retry tap from
+    // error state without a prior stop()) never see state='scanning' paired with
+    // the old errorMsg in the same snapshot.
+    this.data = { ...this.data, errorMsg: null };
     this.log('start()');
     await this.connect();
   }
@@ -836,6 +840,11 @@ export class OBDManager {
 
   private scheduleReconnect() {
     if (!this.active) return;
+    // Guard: if pollLoop and onDisconnected both fire for the same drop event,
+    // only the first caller wins. The second would double the reconnect timer
+    // and increment reconnectAttempt twice, exhausting the budget 2× faster
+    // and launching two concurrent connect() calls that race on shared state.
+    if (this.reconnectTimer !== null) return;
     this.polling = false;
     this.reconnectAttempt++;
     if (this.reconnectAttempt > 8) {

@@ -289,9 +289,12 @@ export function ThrottleView() {
   // right edge and grows leftward as the driver applies more throttle.
   const fillWidth = anim.interpolate({ inputRange: [0, 1], outputRange: [0, TRACK_W], extrapolate: 'clamp' });
   const thumbLeft = anim.interpolate({ inputRange: [0, 1], outputRange: [TRACK_W - THUMB_W, 0], extrapolate: 'clamp' });
+  // Pin green through the full eco band so the fill color agrees with the zone
+  // text. Without this, the fill lerps toward amber from throttle=0 onward,
+  // contradicting "Eco Zone" until the boundary is actually crossed.
   const fillColor = anim.interpolate({
     inputRange: [0, ECO_LIMIT, MOD_LIMIT, 1],
-    outputRange: ['#22C55E', '#F59E0B', '#EF4444', '#EF4444'],
+    outputRange: ['#22C55E', '#22C55E', '#F59E0B', '#EF4444'],
     extrapolate: 'clamp',
   });
   // Badge tries to sit centered over the thumb, clamped so it doesn't overflow
@@ -458,21 +461,23 @@ export function ThrottleView() {
           </View>
         ) : null}
 
-        {/* Live stats row */}
+        {/* Live stats row — only shown when a live session is active so stale
+            values from before a disconnect don't linger while the banner says
+            "Reconnecting…" and the gauge shows no-data. */}
         <View style={styles.statsRow}>
-          {rpm != null ? (
+          {hasLiveData && rpm != null ? (
             <View style={styles.statBlock}>
               <Text style={styles.statVal}>{Math.round(rpm).toLocaleString()}</Text>
               <Text style={styles.statLbl}>RPM</Text>
             </View>
           ) : null}
-          {speedKmH != null ? (
+          {hasLiveData && speedKmH != null ? (
             <View style={styles.statBlock}>
               <Text style={styles.statVal}>{Math.round(speedKmH)}</Text>
               <Text style={styles.statLbl}>km/h</Text>
             </View>
           ) : null}
-          {fuelRateLPerH != null && state === 'ready' ? (
+          {hasLiveData && fuelRateLPerH != null && state === 'ready' ? (
             <View style={styles.statBlock}>
               <Text style={styles.statVal}>{fuelRateLPerH.toFixed(1)}</Text>
               <Text style={styles.statLbl}>L/h</Text>
