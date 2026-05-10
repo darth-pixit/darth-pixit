@@ -200,6 +200,10 @@ export class OBDManager {
     if (!this.ble) this.ble = new BleManager();
     return this.ble;
   }
+  // Incremented at the start of every connect() call. onConnected() captures
+  // the generation at entry and bails on terminal state emits if it has changed,
+  // preventing a stale probe timeout from overwriting a later valid 'ready'.
+  private connectGeneration = 0;
   private device: Device | null = null;
   private serviceUuid: string | null = null;
   private writeCharId: string | null = null;
@@ -318,6 +322,7 @@ export class OBDManager {
   }
 
   private async connect() {
+    const generation = ++this.connectGeneration;
     if (!(await this.waitForPoweredOn())) return;
 
     if (this.cachedDeviceId) {
@@ -325,7 +330,7 @@ export class OBDManager {
         this.emit({ state: 'connecting' });
         this.log(`reconnecting to cached ${this.cachedDeviceId}`);
         this.device = await this.getBle().connectToDevice(this.cachedDeviceId, { timeout: 8000 });
-        await this.onConnected();
+        await this.onConnected(generation);
         return;
       } catch (e: any) {
         this.log(`cached reconnect failed: ${e?.message ?? e}`);
@@ -337,6 +342,7 @@ export class OBDManager {
     this.log('scanning for OBD adapter (15s)');
     const found = await this.scan();
     if (!found) {
+      if (generation !== this.connectGeneration) return;
       this.emit({
         state: 'error',
         errorMsg:
@@ -351,7 +357,7 @@ export class OBDManager {
     try {
       this.device = await found.connect({ timeout: 8000 });
       this.cachedDeviceId = this.device.id;
-      await this.onConnected();
+      await this.onConnected(generation);
     } catch (e: any) {
       this.log(`connect/onConnected failed: ${e?.message ?? e}`);
       this.scheduleReconnect();
@@ -402,7 +408,7 @@ export class OBDManager {
     });
   }
 
-  private async onConnected() {
+  private async onConnected(generation: number) {
     if (!this.device) return;
     this.log('connected; discovering services');
     await this.device.discoverAllServicesAndCharacteristics();
@@ -412,7 +418,7 @@ export class OBDManager {
 
     const picked = await this.pickCharacteristics();
     if (!picked) {
-      if (this.active) {
+      if (this.active && generation === this.connectGeneration) {
         this.emit({
           state: 'error',
           errorMsg:
@@ -481,11 +487,10 @@ export class OBDManager {
     if (!probeOk) {
       this.notifySubscription?.remove();
       this.notifySubscription = null;
-      // Only emit a terminal error if a reconnect hasn't already been scheduled
-      // (e.g. the adapter dropped mid-probe and onDisconnected already called
-      // scheduleReconnect). In that case we stay in 'reconnecting' and let the
-      // timer retry rather than overwriting it with a misleading error message.
-      if (this.active && this.reconnectTimer === null) {
+      // Guard on both the reconnect timer AND the connect generation: a newer
+      // connect() call may have already succeeded (generation advanced), so we
+      // must not overwrite its 'ready' state with a stale probe failure.
+      if (this.active && this.reconnectTimer === null && generation === this.connectGeneration) {
         this.emit({ state: 'error', errorMsg: 'ECU not responding. Turn ignition ON.' });
       }
       return;
@@ -498,8 +503,8 @@ export class OBDManager {
     await this.probeExtendedPIDs();
 
     // stop() may have been called while probeExtendedPIDs() was timing out.
-    // If so, bail — don't override the idle state or start a ghost poll loop.
-    if (!this.device) return;
+    // Or a newer connect() superseded this one. Bail in both cases.
+    if (!this.device || generation !== this.connectGeneration) return;
 
     this.reconnectAttempt = 0;
     this.polling = true;
@@ -812,6 +817,7 @@ export class OBDManager {
   private computeFuelRate() {
     if (!this.vehicle) return;
     const v = this.vehicle;
+    if (v.stoichAFR <= 0 || v.fuelDensityGPerL <= 0) return;
 
     if (this.data.mafGPerS !== null && this.data.mafGPerS > 0) {
       const fuelMass = this.data.mafGPerS / v.stoichAFR;
@@ -901,7 +907,10 @@ function parseHexResponse(raw: string, headerLen = 2): number[] | null {
   }
   if (parts.length <= headerLen) return null;
   try {
-    return parts.slice(headerLen).map((h) => parseInt(h, 16));
+    const bytes = parts.slice(headerLen).map((h) => parseInt(h, 16));
+    // parseInt returns NaN for malformed hex fragments; reject the whole response.
+    if (bytes.some(Number.isNaN)) return null;
+    return bytes;
   } catch {
     return null;
   }

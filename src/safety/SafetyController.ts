@@ -36,6 +36,10 @@ export function initSafetyEngine(): Promise<SafetyEngine> {
       engine.bindAppState(AppState);
       bindOBDStore(engine);
       return engine;
+    }).catch((e) => {
+      // Clear the cached promise so the next call retries from scratch.
+      enginePromise = null;
+      throw e;
     });
   }
   return enginePromise;

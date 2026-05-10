@@ -63,6 +63,9 @@ export function useAutoConnect(vehicle: VehicleCfg): {
     eagerRead.then((val) => {
       clearTimeout(timer);
       setAutoConnectState(val === 'true' ? { phase: 'ready' } : { phase: 'needs_setup' });
+    }).catch((e) => {
+      console.warn('[AutoConnect] AsyncStorage read failed; showing setup screen:', e);
+      // Timer fallback already covers UI — no further action needed.
     });
     return () => clearTimeout(timer);
   }, []);

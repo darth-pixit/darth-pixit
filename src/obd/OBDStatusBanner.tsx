@@ -14,7 +14,27 @@ export function OBDStatusBanner() {
   const { state, adapterName, fuelCalcMethod, errorMsg, debugLog } = useOBDStore();
   const [showLog, setShowLog] = useState(false);
 
-  if (state === 'idle') return null;
+  // Render the modal even in idle state so an open debug-log view isn't
+  // force-closed by a state transition that returns null from the banner.
+  if (state === 'idle') {
+    return (
+      <Modal visible={showLog} animationType="slide" onRequestClose={() => setShowLog(false)}>
+        <View style={styles.modal}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>OBD Debug Log</Text>
+            <TouchableOpacity onPress={() => setShowLog(false)}>
+              <Text style={styles.modalClose}>Close</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={styles.logScroll}>
+            {debugLog.map((line, i) => (
+              <Text key={i} style={styles.logLine} selectable>{line}</Text>
+            ))}
+          </ScrollView>
+        </View>
+      </Modal>
+    );
+  }
 
   const configs = {
     scanning:     { color: '#F5A623', label: 'Scanning for adapter…', showSpinner: true  },

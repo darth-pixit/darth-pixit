@@ -58,6 +58,8 @@ export class OBDWearMonitor {
 
   private loadState: LoadState = { aboveThresholdSince: null, latestT: 0, lastFiredAt: 0 };
   private coolantConsecutiveCount = 0;
+  private coolantAboveThresholdSince = 0;
+  private coolantBlockUntil = 0;
 
   private rpmAboveSince = 0;
   private rpmLastFiredAt = 0;
@@ -118,6 +120,8 @@ export class OBDWearMonitor {
   reset(): void {
     this.loadState = { aboveThresholdSince: null, latestT: 0, lastFiredAt: 0 };
     this.coolantConsecutiveCount = 0;
+    this.coolantAboveThresholdSince = 0;
+    this.coolantBlockUntil = 0;
     this.rpmAboveSince = 0;
     this.rpmLastFiredAt = 0;
   }
@@ -157,25 +161,31 @@ export class OBDWearMonitor {
   private checkCoolant(tempC: number, t: number): void {
     const threshold = this.cfg.maxCoolantTempC;
     if (tempC >= threshold) {
+      if (this.coolantBlockUntil > 0 && t < this.coolantBlockUntil) return;
       this.coolantConsecutiveCount++;
-      // Require 2 consecutive readings to filter sensor noise.
+      if (this.coolantAboveThresholdSince === 0) this.coolantAboveThresholdSince = t;
+      // Require 2 consecutive readings to filter single-sample sensor noise.
       if (this.coolantConsecutiveCount >= 2) {
         const excess = tempC - threshold;
+        const durationS = (t - this.coolantAboveThresholdSince) / 1000;
         this.emit({
           type: 'coolant_spike',
           value: tempC,
           threshold,
           detectedAt: t,
-          durationS: this.coolantConsecutiveCount * 2, // low-priority PID updates every ~2s
+          durationS,
           severity: excess < 3 ? 2 : excess < 8 ? 3 : excess < 15 ? 4 : 5,
           location: this.locationGetter(),
         });
-        // Reset to prevent re-firing every reading while hot.
-        this.coolantConsecutiveCount = -8; // block for ~16s (8 readings × 2s)
+        // Block re-firing for 3 minutes while engine stays hot.
+        this.coolantBlockUntil = t + 180_000;
+        this.coolantConsecutiveCount = 0;
+        this.coolantAboveThresholdSince = 0;
       }
     } else {
-      if (this.coolantConsecutiveCount < 0) this.coolantConsecutiveCount++;
-      else this.coolantConsecutiveCount = 0;
+      this.coolantConsecutiveCount = 0;
+      this.coolantAboveThresholdSince = 0;
+      this.coolantBlockUntil = 0;
     }
   }
 

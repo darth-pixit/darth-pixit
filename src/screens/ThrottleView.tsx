@@ -203,14 +203,9 @@ export function ThrottleView() {
     }
   }, [hasLiveData]);
 
-  useEffect(() => {
-    tripFuelRef.current = 0;
-    tripDistRef.current = 0;
-    binFuelRef.current = Array(BIN_COUNT).fill(0);
-    binDistRef.current = Array(BIN_COUNT).fill(0);
-    setTripAvgKmL(null);
-    setBinAvgs(Array(BIN_COUNT).fill(null));
-  }, [isDemoMode]);
+  // (Accumulator reset on isDemoMode change is already covered by the
+  // !hasLiveData effect above: toggling demo off makes hasLiveData false,
+  // and toggling demo on while OBD is not ready also makes hasLiveData false.)
 
   // Accumulate fuel & distance every 500ms to compute trip average + per-bin averages.
   useEffect(() => {

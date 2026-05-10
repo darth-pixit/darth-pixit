@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   View,
   Text,
@@ -350,8 +350,22 @@ function buildSections(d: OBDData): VitalSection[] {
 
 export function VitalsScreen({ visible, onClose }: VitalsScreenProps) {
   const data = useOBDStore();
-  const sections = buildSections(data);
   const isLive = data.state === 'ready';
+  // buildSections allocates many row objects; memoize so it only runs when the
+  // underlying OBD values that feed into it actually change, not on every
+  // 250ms re-render triggered by incidental store updates.
+  const sections = useMemo(() => buildSections(data), [
+    data.state, data.milOn, data.dtcCount, data.coolantC, data.oilTempC,
+    data.batteryVolts, data.seatbeltStatus,
+    data.tpmsFLKpa, data.tpmsFRKpa, data.tpmsRLKpa, data.tpmsRRKpa,
+    data.speedKmH, data.rpm, data.throttlePosPct, data.engineLoadPct,
+    data.fuelLevelPct, data.fuelRateLPerH, data.fuelCalcMethod,
+    data.iatC, data.ambientTempC, data.mafGPerS, data.mapKPa,
+    data.fuelPressureKPa, data.shortFuelTrim1Pct, data.longFuelTrim1Pct,
+    data.timingAdvanceDeg, data.absoluteLoadPct, data.baroPressureKPa,
+    data.engineRunTimeSec, data.distanceSinceClearedKm, data.timeSinceClearedMin,
+    data.distanceMilOnKm, data.timeMilOnMin,
+  ]);
 
   return (
     <Modal
