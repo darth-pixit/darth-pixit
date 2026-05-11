@@ -225,8 +225,10 @@ export class OBDManager {
     console.log('[OBD]', line);
     this.logBuf.push(line);
     if (this.logBuf.length > 80) this.logBuf.splice(0, this.logBuf.length - 80);
-    this.data = { ...this.data, debugLog: [...this.logBuf] };
-    this.onUpdate?.(this.data);
+    // Do NOT emit here. emit() and emitCurrent() already spread logBuf into
+    // data.debugLog. Emitting on every log call triggers Zustand state updates
+    // at ~8× the poll rate (command + response per PID), causing unnecessary
+    // React re-renders throughout the hot polling loop.
   }
 
   setUpdateHandler(fn: (data: OBDData) => void) {

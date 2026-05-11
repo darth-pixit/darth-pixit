@@ -11,7 +11,11 @@ import {
 import { useOBDStore } from './OBDStore';
 
 export function OBDStatusBanner() {
-  const { state, adapterName, fuelCalcMethod, errorMsg, debugLog } = useOBDStore();
+  const state         = useOBDStore((s) => s.state);
+  const adapterName   = useOBDStore((s) => s.adapterName);
+  const fuelCalcMethod = useOBDStore((s) => s.fuelCalcMethod);
+  const errorMsg      = useOBDStore((s) => s.errorMsg);
+  const debugLog      = useOBDStore((s) => s.debugLog);
   const [showLog, setShowLog] = useState(false);
 
   if (state === 'idle') return null;

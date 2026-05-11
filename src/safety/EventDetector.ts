@@ -236,15 +236,40 @@ export class EventDetector {
   }
 
   /**
-   * Close all open events (trip ending, etc.). Useful so a trip doesn't
-   * end with an unfinished event still "open" in memory.
+   * Close all open events at trip end.
+   *
+   * Applies the same minEventDurationS guard as updateDirectional so a
+   * sub-threshold event that started a few milliseconds before the trip
+   * ended doesn't inflate event counts and scoring.
+   * Overspeeding and distraction events are not subject to this guard
+   * (they have their own duration checks inline).
    */
   flush(t: number): void {
-    if (this.openAccel) { this.closeEvent(this.openAccel, t); this.openAccel = null; }
-    if (this.openBrake) { this.closeEvent(this.openBrake, t); this.openBrake = null; }
-    if (this.openCorner) { this.closeEvent(this.openCorner, t); this.openCorner = null; }
-    if (this.openOverspeed) { this.closeEvent(this.openOverspeed, t); this.openOverspeed = null; }
-    if (this.openDistracted) { this.closeEvent(this.openDistracted, t); this.openDistracted = null; }
+    const minMs = this.cfg.minEventDurationS * 1000;
+    for (const [open, clear] of [
+      [this.openAccel,   (v: OpenEvent | null) => { this.openAccel   = v; }] as const,
+      [this.openBrake,   (v: OpenEvent | null) => { this.openBrake   = v; }] as const,
+      [this.openCorner,  (v: OpenEvent | null) => { this.openCorner  = v; }] as const,
+    ]) {
+      if (open) {
+        if (t - open.startedAt >= minMs) this.closeEvent(open, t);
+        clear(null);
+      }
+    }
+    if (this.openOverspeed) {
+      const dur = this.openOverspeed.lastOverT - this.openOverspeed.startedAt;
+      if (dur >= this.cfg.minOverspeedDurationS * 1000) {
+        this.closeEvent(this.openOverspeed, this.openOverspeed.lastOverT);
+      }
+      this.openOverspeed = null;
+    }
+    if (this.openDistracted) {
+      const dur = this.openDistracted.lastOverT - this.openDistracted.startedAt;
+      if (dur >= this.cfg.distractedMinDurationS * 1000) {
+        this.closeEvent(this.openDistracted, this.openDistracted.lastOverT);
+      }
+      this.openDistracted = null;
+    }
   }
 
   reset(): void {

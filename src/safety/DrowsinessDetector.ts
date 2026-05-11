@@ -60,10 +60,15 @@ import { GyroscopeSample, DrowsinessSignal, SafetyConfig, DEFAULT_SAFETY_CONFIG 
 
 export type DrowsinessListener = (signal: DrowsinessSignal) => void;
 
+interface WindowSample {
+  t: number;
+  mag: number;
+}
+
 /** Samples collected for one statistical window. */
 interface Window {
   startT: number;
-  samples: number[]; // angular velocity magnitude values
+  samples: WindowSample[];
 }
 
 export class DrowsinessDetector {
@@ -121,25 +126,33 @@ export class DrowsinessDetector {
         this.baselineVariance = sampleVariance(this.calibrationSamples);
         this.calibrationComplete = true;
         // Pre-fill the rolling window with calibration samples so we
-        // have a full 60 s of history right after calibration.
-        this.window = { startT: this.calibrationStart, samples: [...this.calibrationSamples] };
+        // have a full window of history right after calibration completes.
+        this.window = {
+          startT: this.calibrationStart,
+          samples: this.calibrationSamples.map((m, i) => ({
+            // Spread calibration samples evenly across the calibration period.
+            t: this.calibrationStart + (i / this.calibrationSamples.length) * calibMinMs,
+            mag: m,
+          })),
+        };
       }
       return;
     }
 
-    // Rolling window update
+    // Rolling window update — evict by timestamp, not sample count.
+    // Count-based eviction assumes a fixed gyro rate (60 Hz), but real
+    // devices report anywhere from 20–200 Hz, making the effective window
+    // 18 s–3 minutes. Time-based eviction is device-rate-agnostic.
     if (this.window.startT === 0) this.window.startT = sample.t;
-    this.window.samples.push(mag);
-    // Evict samples older than WINDOW_MS.
-    const cutoffIndex = this.window.samples.length -
-      Math.round((this.WINDOW_MS / 1000) * 60); // approximate at 60 Hz
-    if (cutoffIndex > 0) {
-      this.window.samples = this.window.samples.slice(cutoffIndex);
-    }
+    this.window.samples.push({ t: sample.t, mag });
+    const cutoffT = sample.t - this.WINDOW_MS;
+    let lo = 0;
+    while (lo < this.window.samples.length && this.window.samples[lo].t < cutoffT) lo++;
+    if (lo > 0) this.window.samples = this.window.samples.slice(lo);
 
-    if (this.window.samples.length < 60) return; // need at least 1 s of data
+    if (this.window.samples.length < 10) return; // need at least a few samples
 
-    const currentVariance = sampleVariance(this.window.samples);
+    const currentVariance = sampleVariance(this.window.samples.map((s) => s.mag));
     if (this.baselineVariance < 1e-6) return; // degenerate baseline
     const ratio = currentVariance / this.baselineVariance;
 
