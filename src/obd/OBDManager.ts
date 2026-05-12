@@ -1,4 +1,4 @@
-import { BleManager, Device, Characteristic } from 'react-native-ble-plx';
+import { BleManager, Device, Service, Characteristic } from 'react-native-ble-plx';
 import { Buffer } from 'buffer';
 
 // Known service UUIDs for common adapter families, ranked by how widespread they are.
@@ -238,6 +238,7 @@ export class OBDManager {
     this.vehicle = vehicle;
     this.reconnectAttempt = 0;
     this.tickCount = 0;
+    this.lowPidIndex = 0;
     this.logBuf = [];
     this.log('start()');
     await this.connect();
@@ -410,7 +411,7 @@ export class OBDManager {
     const services = await this.device.services();
     this.log(`services: ${services.map((s) => s.uuid).join(', ') || '<none>'}`);
 
-    const picked = await this.pickCharacteristics();
+    const picked = await this.pickCharacteristics(services);
     if (!picked) {
       if (this.active) {
         this.emit({
@@ -546,14 +547,13 @@ export class OBDManager {
     }
   }
 
-  private async pickCharacteristics(): Promise<{
+  private async pickCharacteristics(services: Service[]): Promise<{
     serviceUuid: string;
     writeUuid: string;
     notifyUuid: string;
     writeWithResponse: boolean;
   } | null> {
     if (!this.device) return null;
-    const services = await this.device.services();
 
     // Rank services: known-good UUIDs first, then anything else.
     const ranked = [...services].sort((a, b) => {
@@ -837,6 +837,7 @@ export class OBDManager {
   private scheduleReconnect() {
     if (!this.active) return;
     this.polling = false;
+    this.tickCount = 0;
     this.reconnectAttempt++;
     if (this.reconnectAttempt > 8) {
       this.emit({ state: 'error', errorMsg: 'Lost connection. Check the adapter.' });

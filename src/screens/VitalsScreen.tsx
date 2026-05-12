@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   View,
   Text,
@@ -350,7 +350,7 @@ function buildSections(d: OBDData): VitalSection[] {
 
 export function VitalsScreen({ visible, onClose }: VitalsScreenProps) {
   const data = useOBDStore();
-  const sections = buildSections(data);
+  const sections = useMemo(() => buildSections(data), [data]);
   const isLive = data.state === 'ready';
 
   return (

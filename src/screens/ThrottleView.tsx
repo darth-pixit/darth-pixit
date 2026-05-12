@@ -49,9 +49,9 @@ function lerpHex(a: string, b: string, t: number): string {
   const bb = parseInt(b.slice(5, 7), 16);
   const r = Math.round(ar + (br - ar) * t);
   const g = Math.round(ag + (bg - ag) * t);
-  const c = Math.round(ab + (bb - ab) * t);
+  const bl = Math.round(ab + (bb - ab) * t);
   const hex = (n: number) => n.toString(16).padStart(2, '0');
-  return `#${hex(r)}${hex(g)}${hex(c)}`;
+  return `#${hex(r)}${hex(g)}${hex(bl)}`;
 }
 
 // Build the background gradient as precomputed strip colors so we render
@@ -460,27 +460,42 @@ export function ThrottleView() {
 
         {/* Live stats row */}
         <View style={styles.statsRow}>
-          {rpm != null ? (
-            <View style={styles.statBlock}>
-              <Text style={styles.statVal}>{Math.round(rpm).toLocaleString()}</Text>
-              <Text style={styles.statLbl}>RPM</Text>
-            </View>
-          ) : null}
-          {speedKmH != null ? (
-            <View style={styles.statBlock}>
-              <Text style={styles.statVal}>{Math.round(speedKmH)}</Text>
-              <Text style={styles.statLbl}>km/h</Text>
-            </View>
-          ) : null}
-          {fuelRateLPerH != null && state === 'ready' ? (
-            <View style={styles.statBlock}>
-              <Text style={styles.statVal}>{fuelRateLPerH.toFixed(1)}</Text>
-              <Text style={styles.statLbl}>L/h</Text>
-            </View>
-          ) : null}
-          {!hasLiveData ? (
-            <Text style={styles.noDataHint}>Live RPM, speed & fuel rate appear here</Text>
-          ) : null}
+          {isDemoMode ? (
+            <>
+              <View style={styles.statBlock}>
+                <Text style={styles.statVal}>{Math.round(20 + demoThrottle * 60)}</Text>
+                <Text style={styles.statLbl}>km/h</Text>
+              </View>
+              <View style={styles.statBlock}>
+                <Text style={styles.statVal}>{(0.8 + demoThrottle * 9).toFixed(1)}</Text>
+                <Text style={styles.statLbl}>L/h</Text>
+              </View>
+            </>
+          ) : (
+            <>
+              {rpm != null ? (
+                <View style={styles.statBlock}>
+                  <Text style={styles.statVal}>{Math.round(rpm).toLocaleString()}</Text>
+                  <Text style={styles.statLbl}>RPM</Text>
+                </View>
+              ) : null}
+              {speedKmH != null ? (
+                <View style={styles.statBlock}>
+                  <Text style={styles.statVal}>{Math.round(speedKmH)}</Text>
+                  <Text style={styles.statLbl}>km/h</Text>
+                </View>
+              ) : null}
+              {fuelRateLPerH != null && state === 'ready' ? (
+                <View style={styles.statBlock}>
+                  <Text style={styles.statVal}>{fuelRateLPerH.toFixed(1)}</Text>
+                  <Text style={styles.statLbl}>L/h</Text>
+                </View>
+              ) : null}
+              {!hasLiveData ? (
+                <Text style={styles.noDataHint}>Live RPM, speed & fuel rate appear here</Text>
+              ) : null}
+            </>
+          )}
         </View>
 
         {/* Action buttons */}

@@ -56,8 +56,8 @@ export function OBDStatusBanner() {
             </TouchableOpacity>
           </View>
           <ScrollView style={styles.logScroll}>
-            {debugLog.map((line, i) => (
-              <Text key={i} style={styles.logLine} selectable>
+            {debugLog.map((line) => (
+              <Text key={line} style={styles.logLine} selectable>
                 {line}
               </Text>
             ))}
