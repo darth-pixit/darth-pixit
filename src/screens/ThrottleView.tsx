@@ -10,6 +10,8 @@ import {
   StatusBar,
   SafeAreaView,
   Alert,
+  Modal,
+  FlatList,
   ActivityIndicator,
 } from 'react-native';
 import { useOBDStore } from '../obd/OBDStore';
@@ -17,6 +19,8 @@ import { OBDStatusBanner } from '../obd/OBDStatusBanner';
 import { VehicleCfg } from '../obd/OBDManager';
 import { useAuth } from '../auth/AuthContext';
 import { useAutoConnect } from '../obd/useAutoConnect';
+import { useTripStore } from '../trips/TripStore';
+import { Trip } from '../trips/TripDetector';
 import { VitalsScreen } from './VitalsScreen';
 import { DriverScoreScreen } from './DriverScoreScreen';
 
@@ -54,8 +58,6 @@ function lerpHex(a: string, b: string, t: number): string {
   return `#${hex(r)}${hex(g)}${hex(c)}`;
 }
 
-// Build the background gradient as precomputed strip colors so we render
-// once and reuse. Order is left → right, i.e. red → amber → green.
 const BG_STRIP_COLORS: string[] = Array.from({ length: GRADIENT_STRIPS }, (_, i) => {
   const t = i / (GRADIENT_STRIPS - 1);
   return t < AMBER_ANCHOR
@@ -63,8 +65,6 @@ const BG_STRIP_COLORS: string[] = Array.from({ length: GRADIENT_STRIPS }, (_, i)
     : lerpHex(BG_AMBER, BG_GREEN, (t - AMBER_ANCHOR) / (1 - AMBER_ANCHOR));
 });
 
-// Mileage bins: 0–25%, 25–50%, 50–75%, 75–100% throttle.
-// Rendered right-to-left in the reversed layout so bin 0 sits under the green region.
 const BIN_COUNT = 4;
 function binIndex(throttle: number): number {
   const i = Math.floor(throttle * BIN_COUNT);
@@ -120,10 +120,138 @@ const DEFAULT_VEHICLE: VehicleCfg = {
   redlineRPM: 6500,
 };
 
+// ─── Trip detection helpers ───────────────────────────────────────────────────
+
+function fmtElapsed(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function fmtDuration(sec: number): string {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m > 0 ? m : 1}m`;
+}
+
+function fmtDate(ts: number): string {
+  const d = new Date(ts);
+  return (
+    d.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
+    ' · ' +
+    d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  );
+}
+
+function ecoLabel(pct: number): string {
+  if (pct >= 70) return 'Excellent drive';
+  if (pct >= 50) return 'Good drive';
+  if (pct >= 30) return 'Room to improve';
+  return 'High fuel usage';
+}
+
+// ─── Trip summary modal ───────────────────────────────────────────────────────
+
+function TripSummaryModal({ trip, onDismiss }: { trip: Trip; onDismiss: () => void }) {
+  const ecoColor = trip.ecoTimePct >= 70 ? '#22C55E' : trip.ecoTimePct >= 40 ? '#F59E0B' : '#EF4444';
+  return (
+    <Modal transparent animationType="slide" onRequestClose={onDismiss}>
+      <View style={modal.overlay}>
+        <View style={modal.card}>
+          <Text style={modal.header}>Trip Complete</Text>
+          <Text style={[modal.score, { color: ecoColor }]}>{ecoLabel(trip.ecoTimePct)}</Text>
+          <View style={modal.statsGrid}>
+            <StatCell label="Distance"  value={`${trip.distanceKm} km`} />
+            <StatCell label="Duration"  value={fmtDuration(trip.durationSec)} />
+            <StatCell label="Avg speed" value={`${trip.avgSpeedKmH} km/h`} />
+            <StatCell label="Max speed" value={`${trip.maxSpeedKmH} km/h`} />
+            {trip.totalFuelL > 0 && <StatCell label="Fuel used" value={`${trip.totalFuelL} L`} />}
+          </View>
+          <View style={modal.barRow}>
+            <View style={[modal.barSeg, { flex: trip.ecoTimePct, backgroundColor: '#22C55E' }]} />
+            <View style={[modal.barSeg, { flex: trip.modTimePct, backgroundColor: '#F59E0B' }]} />
+            <View style={[modal.barSeg, { flex: trip.pushTimePct, backgroundColor: '#EF4444' }]} />
+          </View>
+          <View style={modal.barLabels}>
+            <Text style={[modal.barLbl, { color: '#22C55E' }]}>{trip.ecoTimePct}% eco</Text>
+            <Text style={[modal.barLbl, { color: '#F59E0B' }]}>{trip.modTimePct}% mod</Text>
+            <Text style={[modal.barLbl, { color: '#EF4444' }]}>{trip.pushTimePct}% push</Text>
+          </View>
+          <TouchableOpacity style={modal.btn} onPress={onDismiss}>
+            <Text style={modal.btnText}>Done</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function StatCell({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={modal.statCell}>
+      <Text style={modal.statVal}>{value}</Text>
+      <Text style={modal.statLbl}>{label}</Text>
+    </View>
+  );
+}
+
+// ─── Trip history modal ───────────────────────────────────────────────────────
+
+function TripHistoryModal({ trips, onClose }: { trips: Trip[]; onClose: () => void }) {
+  return (
+    <Modal transparent animationType="slide" onRequestClose={onClose}>
+      <View style={hist.overlay}>
+        <View style={hist.sheet}>
+          <View style={hist.titleRow}>
+            <Text style={hist.title}>Trip History</Text>
+            <TouchableOpacity onPress={onClose}>
+              <Text style={hist.close}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          {trips.length === 0 ? (
+            <Text style={hist.empty}>No trips recorded yet.</Text>
+          ) : (
+            <FlatList
+              data={trips}
+              keyExtractor={(t) => t.id}
+              renderItem={({ item }) => <TripRow trip={item} />}
+              ItemSeparatorComponent={() => <View style={hist.sep} />}
+            />
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function TripRow({ trip }: { trip: Trip }) {
+  const ecoColor = trip.ecoTimePct >= 70 ? '#22C55E' : trip.ecoTimePct >= 40 ? '#F59E0B' : '#EF4444';
+  return (
+    <View style={hist.row}>
+      <View style={{ flex: 1 }}>
+        <Text style={hist.rowDate}>{fmtDate(trip.startTime)}</Text>
+        <Text style={hist.rowSub}>
+          {trip.distanceKm} km · {fmtDuration(trip.durationSec)}
+          {trip.totalFuelL > 0 ? ` · ${trip.totalFuelL} L` : ''}
+        </Text>
+      </View>
+      <Text style={[hist.rowEco, { color: ecoColor }]}>{trip.ecoTimePct}%{'\n'}eco</Text>
+    </View>
+  );
+}
+
+// ─── Main screen ─────────────────────────────────────────────────────────────
+
 export function ThrottleView() {
   const { engineLoadPct, rpm, state, fuelRateLPerH, speedKmH, start, stop } = useOBDStore();
   const { signOut } = useAuth();
   const { autoConnectState, completeSetup } = useAutoConnect(DEFAULT_VEHICLE);
+  // ── trip detection ──
+  const { currentTripStart, recentTrip, dismissRecentTrip, trips, loadTrips } = useTripStore();
+  const [elapsed, setElapsed] = useState(0);
+  const [showHistory, setShowHistory] = useState(false);
+  // ───────────────────
   const [isDemoMode, setIsDemoMode] = useState(false);
   const [demoThrottle, setDemoThrottle] = useState(0);
   const [tripAvgKmL, setTripAvgKmL] = useState<number | null>(null);
@@ -132,9 +260,7 @@ export function ThrottleView() {
   const [showDriverScore, setShowDriverScore] = useState(false);
 
   // Refs so the accumulation interval always reads fresh values without
-  // needing engineLoadPct/rpm/fuelRate/speed in its dependency array — those
-  // update multiple times per second, so listing them would tear down and
-  // rebuild the 500 ms interval faster than it can ever tick.
+  // needing engineLoadPct/rpm/fuelRate/speed in its dependency array.
   const demoThrottleRef = useRef(demoThrottle);
   const fuelRateRef = useRef(fuelRateLPerH);
   const speedRef = useRef(speedKmH);
@@ -153,11 +279,12 @@ export function ThrottleView() {
   const tripFuelRef = useRef(0);
   const tripDistRef = useRef(0);
 
-  // Per-bin fuel/distance accumulators for the km/L row under the gauge.
-  // Length BIN_COUNT; bin index is Math.floor(throttle * BIN_COUNT).
   const binFuelRef = useRef<number[]>(Array(BIN_COUNT).fill(0));
   const binDistRef = useRef<number[]>(Array(BIN_COUNT).fill(0));
   const [binAvgs, setBinAvgs] = useState<(number | null)[]>(Array(BIN_COUNT).fill(null));
+
+  // Load persisted trips once on mount
+  useEffect(() => { loadTrips(); }, []);
 
   // Demo mode: animated sine-wave throttle simulation
   useEffect(() => {
@@ -174,8 +301,7 @@ export function ThrottleView() {
 
   const hasLiveData = isDemoMode || state === 'ready';
 
-  // Live instantaneous km/L — derived directly from store values so it updates
-  // on every OBD data event. Declared after hasLiveData to avoid TDZ.
+  // Live instantaneous km/L derived directly from store values.
   const liveKmL = useMemo(() => {
     if (!hasLiveData) return null;
     if (isDemoMode) {
@@ -189,9 +315,7 @@ export function ThrottleView() {
     return null;
   }, [hasLiveData, isDemoMode, demoThrottle, fuelRateLPerH, speedKmH]);
 
-  // Reset trip accumulators when the session ends OR when demo mode is toggled.
-  // Without the isDemoMode reset, switching modes while OBD is live pollutes
-  // the trip average by mixing real and simulated fuel/distance figures.
+  // Reset accumulators when session ends or demo mode toggles.
   useEffect(() => {
     if (!hasLiveData) {
       tripFuelRef.current = 0;
@@ -212,18 +336,18 @@ export function ThrottleView() {
     setBinAvgs(Array(BIN_COUNT).fill(null));
   }, [isDemoMode]);
 
-  // Accumulate fuel & distance every 500ms to compute trip average + per-bin averages.
+  // Accumulate fuel & distance every 500ms — trip average + per-bin averages.
   useEffect(() => {
     if (!hasLiveData) return;
     const id = setInterval(() => {
-      const dt = 0.5 / 3600; // 500ms expressed in hours
+      const dt = 0.5 / 3600;
       let fr: number;
       let sp: number;
       let t: number;
       if (isDemoMode) {
         t = demoThrottleRef.current;
-        fr = 0.8 + t * 9;   // simulated L/h
-        sp = 20 + t * 60;   // simulated km/h
+        fr = 0.8 + t * 9;
+        sp = 20 + t * 60;
       } else {
         t = obdThrottleRef.current;
         fr = fuelRateRef.current ?? 0;
@@ -250,6 +374,15 @@ export function ThrottleView() {
     return () => clearInterval(id);
   }, [hasLiveData, isDemoMode]);
 
+  // Live elapsed-time counter for active trip
+  useEffect(() => {
+    if (!currentTripStart) { setElapsed(0); return; }
+    const id = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - currentTripStart) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [currentTripStart]);
+
   const throttle = useMemo(() => {
     if (isDemoMode) return demoThrottle;
     if (engineLoadPct != null) return Math.max(0, Math.min(1, engineLoadPct / 100));
@@ -259,16 +392,12 @@ export function ThrottleView() {
 
   const zone = getZone(throttle);
 
-  // Low-pass filter the raw throttle to kill high-frequency jitter from the
-  // OBD polling (which has visible noise on engineLoadPct). Runs independently
-  // of throttle changes so sample rate is decoupled from input-change rate.
+  // Low-pass filter to kill high-frequency jitter from OBD polling.
   const [smoothedThrottle, setSmoothedThrottle] = useState(0);
   const throttleRef = useRef(throttle);
   useEffect(() => { throttleRef.current = throttle; }, [throttle]);
   useEffect(() => {
     const id = setInterval(() => {
-      // Alpha 0.35: time constant ~137ms — responsive enough to feel live,
-      // still cuts the per-poll jitter in engineLoadPct by ~65% per tick.
       setSmoothedThrottle((prev) => prev * 0.65 + throttleRef.current * 0.35);
     }, 60);
     return () => clearInterval(id);
@@ -284,9 +413,7 @@ export function ThrottleView() {
     }).start();
   }, [smoothedThrottle]);
 
-  // Reversed orientation: throttle=0 puts the thumb at the far right (green/eco);
-  // throttle=1 pulls it left into the red zone. The fill is anchored to the
-  // right edge and grows leftward as the driver applies more throttle.
+  // Reversed orientation: throttle=0 → thumb at right (eco); throttle=1 → thumb at left (push).
   const fillWidth = anim.interpolate({ inputRange: [0, 1], outputRange: [0, TRACK_W], extrapolate: 'clamp' });
   const thumbLeft = anim.interpolate({ inputRange: [0, 1], outputRange: [TRACK_W - THUMB_W, 0], extrapolate: 'clamp' });
   const fillColor = anim.interpolate({
@@ -294,9 +421,6 @@ export function ThrottleView() {
     outputRange: ['#22C55E', '#F59E0B', '#EF4444', '#EF4444'],
     extrapolate: 'clamp',
   });
-  // Badge tries to sit centered over the thumb, clamped so it doesn't overflow
-  // the track. At throttle=0 thumb is at right → badge pinned to right edge;
-  // at throttle=1 thumb is at left → badge pinned to left edge.
   const badgeLeft = anim.interpolate({
     inputRange: [0, 1],
     outputRange: [TRACK_W - BADGE_W, 0],
@@ -305,14 +429,13 @@ export function ThrottleView() {
 
   const obdActive = state === 'ready' || state === 'reconnecting' || state === 'connecting' || state === 'scanning';
 
-  // Idle nudge — differs depending on whether we're scanning or waiting
   function idleNudge(): string {
     if (state === 'error') return 'OBD connection failed. Tap Retry or try Demo mode.';
     if (state === 'idle') return 'OBD adapter disconnected. Tap Reconnect or try Demo mode.';
     return 'Tap "Try Demo" to preview while the adapter connects.';
   }
 
-  // --- Onboarding overlay (first launch only) ---
+  // Onboarding overlay (first launch only — skipped if already in demo mode)
   if (!isDemoMode && autoConnectState.phase === 'needs_setup') {
     return (
       <SafeAreaView style={styles.safe}>
@@ -365,6 +488,14 @@ export function ThrottleView() {
       <StatusBar barStyle="light-content" backgroundColor="#0D0D0D" />
       <OBDStatusBanner />
 
+      {/* Trip active indicator */}
+      {currentTripStart !== null && (
+        <View style={styles.tripChip}>
+          <View style={styles.tripDot} />
+          <Text style={styles.tripChipText}>TRIP  {fmtElapsed(elapsed)}</Text>
+        </View>
+      )}
+
       <View style={styles.body}>
 
         {/* Nudge message box */}
@@ -386,24 +517,17 @@ export function ThrottleView() {
           </Text>
         ) : null}
 
-        {/* Live km/L badge — floats above the thumb so the driver can read
-            instant mileage at the position they're holding. */}
+        {/* Live km/L badge — floats above the thumb */}
         <View style={styles.badgeRow}>
           {hasLiveData && liveKmL != null && Number.isFinite(liveKmL) ? (
-            <Animated.View
-              style={[
-                styles.liveBadge,
-                { left: badgeLeft, borderColor: zone.color },
-              ]}
-            >
+            <Animated.View style={[styles.liveBadge, { left: badgeLeft, borderColor: zone.color }]}>
               <Text style={styles.liveBadgeVal}>{liveKmL.toFixed(1)}</Text>
               <Text style={styles.liveBadgeUnit}>km/L</Text>
             </Animated.View>
           ) : null}
         </View>
 
-        {/* Horizontal gauge — reversed: red on left, green on right.
-            Fill is anchored to the right edge and grows leftward. */}
+        {/* Horizontal gauge — reversed: red on left, green on right */}
         <View style={styles.gaugeOuter}>
           <View style={[StyleSheet.absoluteFill, styles.stripRow]} pointerEvents="none">
             {BG_STRIP_COLORS.map((c, i) => (
@@ -411,10 +535,7 @@ export function ThrottleView() {
             ))}
           </View>
           <Animated.View
-            style={[
-              styles.fill,
-              { width: fillWidth, backgroundColor: fillColor },
-            ]}
+            style={[styles.fill, { width: fillWidth, backgroundColor: fillColor }]}
             pointerEvents="none"
           />
           <Animated.View style={[styles.thumb, { left: thumbLeft }]} />
@@ -433,8 +554,7 @@ export function ThrottleView() {
           </View>
         </View>
 
-        {/* Per-bin km/L — 4 equal slices, shown right-to-left so bin 0
-            (0–25% throttle, the eco end) sits under the green region. */}
+        {/* Per-bin km/L row */}
         <View style={styles.binRow}>
           {[3, 2, 1, 0].map((i) => {
             const v = binAvgs[i];
@@ -490,9 +610,6 @@ export function ThrottleView() {
               <Text style={styles.btnText}>Disconnect OBD</Text>
             </TouchableOpacity>
           ) : (
-            // Only shown after a manual disconnect or terminal error — auto-connect
-            // handles the first connection; the user gets here by tapping Disconnect
-            // or when the adapter can't be found after all retries.
             <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={() => start(DEFAULT_VEHICLE)}>
               <Text style={styles.btnText}>{state === 'error' ? 'Retry' : 'Reconnect'}</Text>
             </TouchableOpacity>
@@ -507,44 +624,59 @@ export function ThrottleView() {
           </TouchableOpacity>
         </View>
 
-        {/* My Driving (safety score, alerts, trip history) */}
-        <TouchableOpacity
-          style={styles.vitalsBtn}
-          onPress={() => setShowDriverScore(true)}
-        >
+        {/* My Driving Score */}
+        <TouchableOpacity style={styles.vitalsBtn} onPress={() => setShowDriverScore(true)}>
           <Text style={styles.vitalsText}>My Driving Score</Text>
           <Text style={styles.vitalsChevron}></Text>
         </TouchableOpacity>
 
-        {/* All Vitals (full diagnostic readout) */}
-        <TouchableOpacity
-          style={styles.vitalsBtn}
-          onPress={() => setShowVitals(true)}
-        >
+        {/* All Vitals */}
+        <TouchableOpacity style={styles.vitalsBtn} onPress={() => setShowVitals(true)}>
           <Text style={styles.vitalsText}>View All Vitals</Text>
           <Text style={styles.vitalsChevron}></Text>
         </TouchableOpacity>
 
-        {/* Sign out */}
-        <TouchableOpacity
-          style={styles.signOutBtn}
-          onPress={() => {
-            Alert.alert('Sign out', 'Are you sure you want to sign out?', [
-              { text: 'Cancel', style: 'cancel' },
-              { text: 'Sign out', style: 'destructive', onPress: signOut },
-            ]);
-          }}
-        >
-          <Text style={styles.signOutText}>Sign out</Text>
-        </TouchableOpacity>
+        {/* Footer: trips history link + sign out */}
+        <View style={styles.footer}>
+          {trips.length > 0 && (
+            <TouchableOpacity onPress={() => setShowHistory(true)}>
+              <Text style={styles.tripsLink}>
+                {trips.length} trip{trips.length !== 1 ? 's' : ''} recorded
+              </Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={styles.signOutBtn}
+            onPress={() => {
+              Alert.alert('Sign out', 'Are you sure you want to sign out?', [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Sign out', style: 'destructive', onPress: signOut },
+              ]);
+            }}
+          >
+            <Text style={styles.signOutText}>Sign out</Text>
+          </TouchableOpacity>
+        </View>
 
       </View>
+
+      {/* Post-trip summary — slides up automatically after a trip ends */}
+      {recentTrip && (
+        <TripSummaryModal trip={recentTrip} onDismiss={dismissRecentTrip} />
+      )}
+
+      {/* Trip history sheet */}
+      {showHistory && (
+        <TripHistoryModal trips={trips} onClose={() => setShowHistory(false)} />
+      )}
 
       <VitalsScreen visible={showVitals} onClose={() => setShowVitals(false)} />
       <DriverScoreScreen visible={showDriverScore} onClose={() => setShowDriverScore(false)} />
     </SafeAreaView>
   );
 }
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   safe: {
@@ -597,8 +729,6 @@ const styles = StyleSheet.create({
     position: 'relative',
     backgroundColor: '#1a1a1a',
   },
-  // Right-anchored fill: grows leftward as throttle rises. Lower opacity so
-  // the gradient background stays readable underneath.
   fill: {
     position: 'absolute',
     top: 0,
@@ -776,6 +906,29 @@ const styles = StyleSheet.create({
     fontSize: 18,
     lineHeight: 18,
   },
+
+  // Trip active chip
+  tripChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 6,
+    backgroundColor: '#052e16',
+  },
+  tripDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#22C55E' },
+  tripChipText: { color: '#22C55E', fontSize: 13, fontWeight: '700', letterSpacing: 1.5 },
+
+  // Footer
+  footer: {
+    alignItems: 'center',
+    gap: 6,
+  },
+  tripsLink: {
+    color: '#3B82F6',
+    fontSize: 13,
+    fontWeight: '500',
+  },
   signOutBtn: {
     alignItems: 'center',
     paddingVertical: 6,
@@ -816,4 +969,39 @@ const styles = StyleSheet.create({
     width: '100%',
     marginTop: 8,
   },
+});
+
+// ─── Trip summary modal styles ────────────────────────────────────────────────
+
+const modal = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  card: { backgroundColor: '#141414', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 28, paddingBottom: 40, gap: 16 },
+  header: { color: '#FFFFFF', fontSize: 22, fontWeight: '800', textAlign: 'center' },
+  score: { fontSize: 16, fontWeight: '600', textAlign: 'center' },
+  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'center' },
+  statCell: { alignItems: 'center', minWidth: 90 },
+  statVal: { color: '#FFFFFF', fontSize: 22, fontWeight: '700' },
+  statLbl: { color: '#555', fontSize: 11, fontWeight: '600', letterSpacing: 1, marginTop: 2 },
+  barRow: { flexDirection: 'row', height: 10, borderRadius: 5, overflow: 'hidden' },
+  barSeg: { height: 10 },
+  barLabels: { flexDirection: 'row', justifyContent: 'space-between' },
+  barLbl: { fontSize: 11, fontWeight: '600' },
+  btn: { backgroundColor: '#22C55E', paddingVertical: 14, borderRadius: 12, alignItems: 'center', marginTop: 4 },
+  btnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+});
+
+// ─── Trip history modal styles ────────────────────────────────────────────────
+
+const hist = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  sheet: { backgroundColor: '#141414', borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '80%', paddingBottom: 40 },
+  titleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 24, paddingBottom: 16 },
+  title: { color: '#FFFFFF', fontSize: 20, fontWeight: '800' },
+  close: { color: '#555', fontSize: 20, fontWeight: '600' },
+  empty: { color: '#555', textAlign: 'center', padding: 40 },
+  sep: { height: 1, backgroundColor: '#1f1f1f', marginHorizontal: 24 },
+  row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 14 },
+  rowDate: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
+  rowSub: { color: '#555', fontSize: 12, marginTop: 3 },
+  rowEco: { fontSize: 13, fontWeight: '700', textAlign: 'right', lineHeight: 18 },
 });
