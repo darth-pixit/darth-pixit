@@ -27,6 +27,20 @@ export interface DemoDriver {
   };
 }
 
+// Fixed locations for demo events — deterministic so the screen doesn't flicker
+// on re-renders and the map (if ever added) shows consistent pins.
+const DEMO_LOCATIONS = [
+  { lat: 12.9716, lng: 77.5946 },
+  { lat: 12.9732, lng: 77.5961 },
+  { lat: 12.9748, lng: 77.5930 },
+  { lat: 12.9705, lng: 77.5975 },
+  { lat: 12.9760, lng: 77.5918 },
+  { lat: 12.9721, lng: 77.5952 },
+  { lat: 12.9738, lng: 77.5940 },
+  { lat: 12.9712, lng: 77.5964 },
+];
+let _locationIdx = 0;
+
 function ev(
   id: string,
   type: SafetyEvent['type'],
@@ -34,6 +48,8 @@ function ev(
   peak: number,
   startedAt: number,
 ): SafetyEvent {
+  const location = DEMO_LOCATIONS[_locationIdx % DEMO_LOCATIONS.length];
+  _locationIdx++;
   return {
     id,
     type,
@@ -41,7 +57,7 @@ function ev(
     peak,
     startedAt,
     endedAt: startedAt + 1500,
-    location: { lat: 12.97 + Math.random() * 0.02, lng: 77.59 + Math.random() * 0.02 },
+    location,
   };
 }
 

@@ -250,6 +250,9 @@ export class OBDManager {
     this.responseResolve = null;
     this.rxBuffer = '';
 
+    // Kill any in-progress scan so it doesn't complete and reconnect after stop.
+    try { this.ble?.stopDeviceScan(); } catch {}
+
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -319,6 +322,8 @@ export class OBDManager {
 
   private async connect() {
     if (!(await this.waitForPoweredOn())) return;
+    // stop() may have been called while waiting for BLE to power on.
+    if (!this.active) return;
 
     if (this.cachedDeviceId) {
       try {
@@ -336,6 +341,8 @@ export class OBDManager {
     this.emit({ state: 'scanning' });
     this.log('scanning for OBD adapter (15s)');
     const found = await this.scan();
+    // stop() may have been called while the 15s scan was running.
+    if (!this.active) return;
     if (!found) {
       this.emit({
         state: 'error',
@@ -498,8 +505,9 @@ export class OBDManager {
     await this.probeExtendedPIDs();
 
     // stop() may have been called while probeExtendedPIDs() was timing out.
-    // If so, bail — don't override the idle state or start a ghost poll loop.
-    if (!this.device) return;
+    // Check active (not device) — a racing connect() can re-assign this.device
+    // after stop() nulled it, making !this.device an unreliable guard.
+    if (!this.active || !this.device) return;
 
     this.reconnectAttempt = 0;
     this.polling = true;
@@ -836,6 +844,9 @@ export class OBDManager {
 
   private scheduleReconnect() {
     if (!this.active) return;
+    // Guard: onDisconnected and pollLoop can both call this for the same drop.
+    // Only the first call should schedule; the second is a no-op.
+    if (this.reconnectTimer !== null) return;
     this.polling = false;
     this.reconnectAttempt++;
     if (this.reconnectAttempt > 8) {
@@ -884,12 +895,16 @@ function isEcuUnreachable(resp: string): boolean {
  *   2 = Mode 01 ("41 0C ...")   — default
  *   3 = Mode 22 ("62 XX XX ...") — extended diagnostics (seatbelt, TPMS)
  */
+// ELM327 non-data lines that can contain hex-like characters and must not be
+// parsed as PID data. Any of these as a complete line means "no data here".
+const ELM_NON_DATA_LINE = /^(SEARCHING|BUS |NO DATA|UNABLE|CAN ERROR|STOPPED|BUFFER FULL|FB ERROR|ERROR|\?)$/i;
+
 function parseHexResponse(raw: string, headerLen = 2): number[] | null {
   // Strip transient ELM327 status lines so they don't get parsed as hex.
   const cleaned = raw
     .split(/[\r\n]+/)
     .map((l) => l.trim())
-    .filter((l) => l && !/^SEARCHING/i.test(l) && !/^BUS /i.test(l))
+    .filter((l) => l && !ELM_NON_DATA_LINE.test(l))
     .join(' ');
   const hexOnly = cleaned.replace(/[^0-9A-Fa-f\s]/g, '').trim();
 

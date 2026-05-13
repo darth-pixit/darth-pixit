@@ -611,7 +611,9 @@ export function ThrottleView() {
             </TouchableOpacity>
           ) : (
             <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={() => start(DEFAULT_VEHICLE)}>
-              <Text style={styles.btnText}>{state === 'error' ? 'Retry' : 'Reconnect'}</Text>
+              <Text style={styles.btnText}>
+                {state === 'error' ? 'Retry' : state === 'idle' ? 'Connect' : 'Reconnect'}
+              </Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity
