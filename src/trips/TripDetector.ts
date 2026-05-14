@@ -72,7 +72,7 @@ export class TripDetector {
         if (spd < MOTION_SPEED) {
           this.phase = 'idle';
         } else if (now - this.phaseAt >= MOTION_HOLD_MS) {
-          this.tripStart = this.phaseAt;
+          this.tripStart = now;
           this.samples = [];
           this.phase = 'running';
           this.onActive?.(true, this.tripStart);
@@ -137,9 +137,12 @@ export class TripDetector {
       avgSpeedKmH: Math.round(totalSpeed / s.length),
       distanceKm: Math.round(distKm * 10) / 10,
       totalFuelL: Math.round(fuelL * 100) / 100,
-      ecoTimePct: total ? Math.round((ecoTicks / total) * 100) : 0,
-      modTimePct: total ? Math.round((modTicks / total) * 100) : 0,
-      pushTimePct: total ? Math.round((pushTicks / total) * 100) : 0,
+      ecoTimePct:  total ? Math.round((ecoTicks  / total) * 100) : 0,
+      modTimePct:  total ? Math.round((modTicks  / total) * 100) : 0,
+      // Derived so the three values always sum to exactly 100.
+      pushTimePct: total
+        ? 100 - Math.round((ecoTicks / total) * 100) - Math.round((modTicks / total) * 100)
+        : 0,
     };
   }
 }
