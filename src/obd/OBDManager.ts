@@ -843,7 +843,14 @@ export class OBDManager {
       return;
     }
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempt - 1), 30000);
-    this.emit({ state: 'reconnecting' });
+    // Clear all live sensor readings so the UI never shows stale values from
+    // the previous connection while a reconnect is in progress.
+    this.emit({
+      state: 'reconnecting',
+      rpm: null, speedKmH: null, mafGPerS: null, mapKPa: null,
+      iatC: null, engineLoadPct: null, fuelRateLPerH: null,
+      fuelCalcMethod: 'none',
+    });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
