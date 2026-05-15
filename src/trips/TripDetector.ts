@@ -128,6 +128,11 @@ export class TripDetector {
     }
 
     const total = ecoTicks + modTicks + pushTicks;
+    // Round eco and mod independently; assign the 100% remainder to push so
+    // the three values always sum to exactly 100 (important for flex bar charts).
+    const ecoTimePct  = total ? Math.round((ecoTicks / total) * 100) : 0;
+    const modTimePct  = total ? Math.round((modTicks / total) * 100) : 0;
+    const pushTimePct = total ? Math.max(0, 100 - ecoTimePct - modTimePct) : 0;
     return {
       id: String(this.tripStart),
       startTime: this.tripStart,
@@ -137,9 +142,9 @@ export class TripDetector {
       avgSpeedKmH: Math.round(totalSpeed / s.length),
       distanceKm: Math.round(distKm * 10) / 10,
       totalFuelL: Math.round(fuelL * 100) / 100,
-      ecoTimePct: total ? Math.round((ecoTicks / total) * 100) : 0,
-      modTimePct: total ? Math.round((modTicks / total) * 100) : 0,
-      pushTimePct: total ? Math.round((pushTicks / total) * 100) : 0,
+      ecoTimePct,
+      modTimePct,
+      pushTimePct,
     };
   }
 }
