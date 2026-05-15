@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { FirebaseAuthTypes } from '@react-native-firebase/auth';
 import { useAuth } from '../auth/AuthContext';
+import { authErrorToMessage } from '../auth/errors';
 
 const CODE_LENGTH = 6;
 
@@ -100,7 +101,7 @@ export function OTPScreen({ confirmation, phone, onBack }: Props) {
       setDigits(Array(CODE_LENGTH).fill(''));
       setTimeout(() => inputRefs.current[0]?.focus(), 50);
     } catch (e: any) {
-      Alert.alert('Error', e?.message ?? 'Failed to resend OTP.');
+      Alert.alert('Error', authErrorToMessage(e, 'Failed to resend OTP.'));
     } finally {
       setResending(false);
     }

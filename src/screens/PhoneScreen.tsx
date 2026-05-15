@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { FirebaseAuthTypes } from '@react-native-firebase/auth';
 import { useAuth } from '../auth/AuthContext';
+import { authErrorToMessage } from '../auth/errors';
 
 interface Props {
   onConfirmation: (c: FirebaseAuthTypes.ConfirmationResult, phone: string) => void;
@@ -36,20 +37,7 @@ export function PhoneScreen({ onConfirmation }: Props) {
       const confirmation = await sendOTP(formatted);
       onConfirmation(confirmation, formatted);
     } catch (e: any) {
-      const code: string = e?.code ?? '';
-      const fallback = typeof e === 'string'
-        ? e
-        : (e?.message ?? 'Failed to send OTP. Check the number and try again.');
-      // Android-only: Play Integrity + reCAPTCHA both failed because the app's
-      // signing-cert SHA isn't registered in Firebase Console. Explain instead
-      // of dumping the raw Firebase string on the user.
-      const msg = code === 'auth/missing-client-identifier'
-        ? 'This build is not registered with Firebase yet.\n\n' +
-          'Run scripts/print-firebase-shas.sh, add the SHA-1 and SHA-256 to ' +
-          'Firebase Console > Project Settings > Android app > "Add fingerprint", ' +
-          'then re-download google-services.json and reinstall the APK.'
-        : fallback;
-      Alert.alert('Error', msg);
+      Alert.alert('Error', authErrorToMessage(e, 'Failed to send OTP. Check the number and try again.'));
     } finally {
       setLoading(false);
     }
