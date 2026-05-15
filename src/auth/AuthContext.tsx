@@ -1,9 +1,11 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import auth, { FirebaseAuthTypes } from '@react-native-firebase/auth';
 
-// iOS debug builds have no push notification entitlements, so Firebase phone
-// auth hangs waiting for APNs registration that never completes. Disable app
-// verification at module load time — well before any signInWithPhoneNumber call.
+// In dev/debug builds, disable native app verification so test phone numbers
+// configured in Firebase Console (Auth > Sign-in method > Phone > "Phone numbers
+// for testing") sign in without Play Integrity (Android) or APNs (iOS).
+// Real phone numbers still require SHA-1/SHA-256 registered in Firebase Console
+// — see scripts/print-firebase-shas.sh.
 if (__DEV__) {
   auth().settings.appVerificationDisabledForTesting = true;
 }

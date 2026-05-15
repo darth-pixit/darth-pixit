@@ -226,6 +226,31 @@ Xcode: set **Build Settings → User Script Sandboxing → No** (otherwise shell
 
 ---
 
+## Firebase Phone Auth Setup (Android)
+
+`signInWithPhoneNumber` on Android verifies the app via Play Integrity (or
+reCAPTCHA fallback). Both fail with `auth/missing-client-identifier` unless the
+signing certificate's SHA fingerprint is registered in Firebase Console for
+project `mileagetracker-7cd8f`, package `com.darth.pixit`.
+
+One-time setup per signing keystore (debug or release):
+
+```bash
+./scripts/print-firebase-shas.sh                          # debug.keystore
+./scripts/print-firebase-shas.sh release.jks ALIAS PASS   # release keystore
+```
+
+Paste the printed SHA-1 and SHA-256 into Firebase Console → Project Settings →
+Android app → "Add fingerprint", then download a fresh `google-services.json`
+into `android/app/`. Rebuild the APK.
+
+Local testing without Firebase Console access: add a test phone number under
+Firebase Console → Authentication → Sign-in method → Phone → "Phone numbers for
+testing". Debug builds set `appVerificationDisabledForTesting = true` in
+`AuthContext.tsx`, so test numbers sign in without the Play Integrity check.
+
+---
+
 ## Known Gotchas
 
 - **Blank screen on device:** Metro not running, or BleManager instantiated eagerly (see lazy rule above).
@@ -233,3 +258,4 @@ Xcode: set **Build Settings → User Script Sandboxing → No** (otherwise shell
 - **Pod install fails:** Needs Ruby 3+ from Homebrew, not system Ruby 2.6.
 - **Trip avg never appears:** Only accumulates when both `fuelRate > 0.1 L/h` and `speed > 0.5 km/h` — idle or stationary driving doesn't count.
 - **fillColor interpolation warning:** React Native Animated string interpolation requires `useNativeDriver: false` — already set.
+- **`auth/missing-client-identifier` on Android Send OTP:** Signing-cert SHA not registered in Firebase Console — see "Firebase Phone Auth Setup (Android)" above.
