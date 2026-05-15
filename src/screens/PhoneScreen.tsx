@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { FirebaseAuthTypes } from '@react-native-firebase/auth';
 import { useAuth } from '../auth/AuthContext';
+import { authErrorToMessage } from '../auth/errors';
 
 interface Props {
   onConfirmation: (c: FirebaseAuthTypes.ConfirmationResult, phone: string) => void;
@@ -36,8 +37,7 @@ export function PhoneScreen({ onConfirmation }: Props) {
       const confirmation = await sendOTP(formatted);
       onConfirmation(confirmation, formatted);
     } catch (e: any) {
-      const msg = typeof e === 'string' ? e : (e?.message ?? 'Failed to send OTP. Check the number and try again.');
-      Alert.alert('Error', msg);
+      Alert.alert('Error', authErrorToMessage(e, 'Failed to send OTP. Check the number and try again.'));
     } finally {
       setLoading(false);
     }
