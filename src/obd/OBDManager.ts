@@ -234,6 +234,7 @@ export class OBDManager {
   }
 
   async start(vehicle: VehicleCfg) {
+    if (this.active) return;
     this.active = true;
     this.vehicle = vehicle;
     this.reconnectAttempt = 0;
