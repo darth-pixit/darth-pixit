@@ -274,6 +274,7 @@ export class OBDManager {
     this.log(`BLE state: ${state}`);
     if (state === 'PoweredOn') return true;
     if (state === 'Unauthorized') {
+      if (!this.active) return false;
       this.emit({
         state: 'error',
         errorMsg: 'Bluetooth permission denied. Enable it in Settings → DarthPixit → Bluetooth.',
@@ -281,6 +282,7 @@ export class OBDManager {
       return false;
     }
     if (state === 'Unsupported') {
+      if (!this.active) return false;
       this.emit({ state: 'error', errorMsg: 'BLE not supported on this device.' });
       return false;
     }
@@ -296,6 +298,7 @@ export class OBDManager {
         if (s === 'Unauthorized' || s === 'Unsupported') {
           sub.remove();
           clearTimeout(timer);
+          if (!this.active) { resolve(false); return; }
           this.emit({
             state: 'error',
             errorMsg:
@@ -308,6 +311,7 @@ export class OBDManager {
       }, true);
       const timer = setTimeout(() => {
         sub.remove();
+        if (!this.active) { resolve(false); return; }
         this.emit({
           state: 'error',
           errorMsg: 'Bluetooth is off. Turn it on and try again.',
@@ -319,6 +323,7 @@ export class OBDManager {
 
   private async connect() {
     if (!(await this.waitForPoweredOn())) return;
+    if (!this.active) return;
 
     if (this.cachedDeviceId) {
       try {
@@ -336,6 +341,7 @@ export class OBDManager {
     this.emit({ state: 'scanning' });
     this.log('scanning for OBD adapter (15s)');
     const found = await this.scan();
+    if (!this.active) return;
     if (!found) {
       this.emit({
         state: 'error',
@@ -837,6 +843,10 @@ export class OBDManager {
   private scheduleReconnect() {
     if (!this.active) return;
     this.polling = false;
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.reconnectAttempt++;
     if (this.reconnectAttempt > 8) {
       this.emit({ state: 'error', errorMsg: 'Lost connection. Check the adapter.' });
