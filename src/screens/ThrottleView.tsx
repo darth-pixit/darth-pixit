@@ -670,8 +670,8 @@ export function ThrottleView() {
         <TripHistoryModal trips={trips} onClose={() => setShowHistory(false)} />
       )}
 
-      <VitalsScreen visible={showVitals} onClose={() => setShowVitals(false)} />
-      <DriverScoreScreen visible={showDriverScore} onClose={() => setShowDriverScore(false)} />
+      {showVitals && <VitalsScreen visible onClose={() => setShowVitals(false)} />}
+      {showDriverScore && <DriverScoreScreen visible onClose={() => setShowDriverScore(false)} />}
     </SafeAreaView>
   );
 }

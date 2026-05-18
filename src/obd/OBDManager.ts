@@ -208,6 +208,10 @@ export class OBDManager {
   private responseResolve: ((s: string) => void) | null = null;
   private active = false;
   private polling = false;
+  // Incremented on every connect() call. onConnected() captures it at entry and
+  // bails at the end if a newer connect() superseded it (e.g. adapter dropped
+  // during probeExtendedPIDs and the reconnect timer already fired a new connect).
+  private connectGen = 0;
   private lowPidIndex = 0;
   private tickCount = 0;
   private reconnectAttempt = 0;
@@ -318,6 +322,7 @@ export class OBDManager {
   }
 
   private async connect() {
+    const gen = ++this.connectGen;
     if (!(await this.waitForPoweredOn())) return;
 
     if (this.cachedDeviceId) {
@@ -325,7 +330,7 @@ export class OBDManager {
         this.emit({ state: 'connecting' });
         this.log(`reconnecting to cached ${this.cachedDeviceId}`);
         this.device = await this.getBle().connectToDevice(this.cachedDeviceId, { timeout: 8000 });
-        await this.onConnected();
+        await this.onConnected(gen);
         return;
       } catch (e: any) {
         this.log(`cached reconnect failed: ${e?.message ?? e}`);
@@ -351,7 +356,7 @@ export class OBDManager {
     try {
       this.device = await found.connect({ timeout: 8000 });
       this.cachedDeviceId = this.device.id;
-      await this.onConnected();
+      await this.onConnected(gen);
     } catch (e: any) {
       this.log(`connect/onConnected failed: ${e?.message ?? e}`);
       this.scheduleReconnect();
@@ -402,7 +407,7 @@ export class OBDManager {
     });
   }
 
-  private async onConnected() {
+  private async onConnected(gen: number) {
     if (!this.device) return;
     this.log('connected; discovering services');
     await this.device.discoverAllServicesAndCharacteristics();
@@ -497,9 +502,10 @@ export class OBDManager {
     // delay is bounded (~10 s worst-case on a vehicle with all PIDs unsupported).
     await this.probeExtendedPIDs();
 
-    // stop() may have been called while probeExtendedPIDs() was timing out.
-    // If so, bail — don't override the idle state or start a ghost poll loop.
-    if (!this.device) return;
+    // stop() may have been called, or the adapter disconnected and a newer
+    // connect() already started, while probeExtendedPIDs() was timing out.
+    // In either case, bail — don't clobber the new state or start a ghost loop.
+    if (!this.device || this.connectGen !== gen) return;
 
     this.reconnectAttempt = 0;
     this.polling = true;

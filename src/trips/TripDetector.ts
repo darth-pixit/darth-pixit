@@ -128,6 +128,10 @@ export class TripDetector {
     }
 
     const total = ecoTicks + modTicks + pushTicks;
+    // Derive the third percentage so the three always sum to exactly 100.
+    const ecoPct  = total ? Math.round((ecoTicks  / total) * 100) : 0;
+    const modPct  = total ? Math.round((modTicks  / total) * 100) : 0;
+    const pushPct = total ? 100 - ecoPct - modPct               : 0;
     return {
       id: String(this.tripStart),
       startTime: this.tripStart,
@@ -137,9 +141,9 @@ export class TripDetector {
       avgSpeedKmH: Math.round(totalSpeed / s.length),
       distanceKm: Math.round(distKm * 10) / 10,
       totalFuelL: Math.round(fuelL * 100) / 100,
-      ecoTimePct: total ? Math.round((ecoTicks / total) * 100) : 0,
-      modTimePct: total ? Math.round((modTicks / total) * 100) : 0,
-      pushTimePct: total ? Math.round((pushTicks / total) * 100) : 0,
+      ecoTimePct: ecoPct,
+      modTimePct: modPct,
+      pushTimePct: pushPct,
     };
   }
 }
