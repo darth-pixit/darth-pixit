@@ -32,11 +32,17 @@ let enginePromise: Promise<SafetyEngine> | null = null;
 
 export function initSafetyEngine(): Promise<SafetyEngine> {
   if (!enginePromise) {
-    enginePromise = SafetyEngine.create(new AsyncStorageKV()).then((engine) => {
-      engine.bindAppState(AppState);
-      bindOBDStore(engine);
-      return engine;
-    });
+    enginePromise = SafetyEngine.create(new AsyncStorageKV())
+      .then((engine) => {
+        engine.bindAppState(AppState);
+        bindOBDStore(engine);
+        return engine;
+      })
+      .catch((e) => {
+        // Clear so the next call retries instead of returning a permanently-rejected promise.
+        enginePromise = null;
+        throw e;
+      });
   }
   return enginePromise;
 }

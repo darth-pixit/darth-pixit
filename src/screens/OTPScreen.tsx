@@ -35,6 +35,9 @@ export function OTPScreen({ confirmation, phone, onBack }: Props) {
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
   const inputRefs = useRef<Array<TextInput | null>>(Array(CODE_LENGTH).fill(null));
+  // Ref guard prevents double-submission when SMS autofill populates the last
+  // two boxes in the same render cycle (both see loading=false via stale state).
+  const verifyInFlightRef = useRef(false);
 
   useEffect(() => {
     // Auto-focus first box on mount
@@ -78,7 +81,8 @@ export function OTPScreen({ confirmation, phone, onBack }: Props) {
   };
 
   const handleVerify = async (code: string) => {
-    if (loading) return;
+    if (verifyInFlightRef.current) return;
+    verifyInFlightRef.current = true;
     setLoading(true);
     try {
       await confirmOTP(activeConfirmation.current, code);
@@ -89,6 +93,7 @@ export function OTPScreen({ confirmation, phone, onBack }: Props) {
       setTimeout(() => inputRefs.current[0]?.focus(), 50);
     } finally {
       setLoading(false);
+      verifyInFlightRef.current = false;
     }
   };
 
