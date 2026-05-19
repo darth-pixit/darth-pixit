@@ -225,8 +225,9 @@ export class OBDManager {
     console.log('[OBD]', line);
     this.logBuf.push(line);
     if (this.logBuf.length > 80) this.logBuf.splice(0, this.logBuf.length - 80);
-    this.data = { ...this.data, debugLog: [...this.logBuf] };
-    this.onUpdate?.(this.data);
+    // Don't call onUpdate here — the next emit() or emitCurrent() will include
+    // the updated logBuf. Pushing a Zustand update on every debug line causes
+    // excessive re-renders during the PID poll loop.
   }
 
   setUpdateHandler(fn: (data: OBDData) => void) {
@@ -238,6 +239,7 @@ export class OBDManager {
     this.vehicle = vehicle;
     this.reconnectAttempt = 0;
     this.tickCount = 0;
+    this.lowPidIndex = 0;
     this.logBuf = [];
     this.log('start()');
     await this.connect();
@@ -508,11 +510,19 @@ export class OBDManager {
   }
 
   /**
-   * Attempt seatbelt and TPMS reads exactly once at connection time.
-   * We don't retry on failure — if the vehicle doesn't support these
-   * PIDs they just remain null / 'unknown'.
+   * Attempt seatbelt and TPMS reads once per session.
+   * Skipped on reconnects if the first probe already settled the values —
+   * these change too slowly to justify ~10s of 1.5s-timeout PID calls on
+   * every Bluetooth glitch reconnect.
    */
   private async probeExtendedPIDs() {
+    // If seatbelt has been resolved (anything other than the initial 'unknown')
+    // and at least one TPMS wheel has a reading, the session probe already ran.
+    const alreadyProbed =
+      this.data.seatbeltStatus !== 'unknown' ||
+      this.data.tpmsFLKpa !== null ||
+      this.data.tpmsFRKpa !== null;
+    if (alreadyProbed) return;
     // Seatbelt
     for (const pid of SEATBELT_PIDS_M22) {
       try {
@@ -856,9 +866,7 @@ export class OBDManager {
   }
 
   private emitCurrent() {
-    // Spread to a new object so Zustand's Object.is guard always sees a fresh
-    // reference and triggers re-renders, regardless of whether log() ran first.
-    this.data = { ...this.data };
+    this.data = { ...this.data, debugLog: [...this.logBuf] };
     this.onUpdate?.(this.data);
   }
 }
