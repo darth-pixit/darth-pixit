@@ -732,7 +732,7 @@ const styles = StyleSheet.create({
   fill: {
     position: 'absolute',
     top: 0,
-    right: 0,
+    left: 0,
     height: TRACK_H,
     opacity: 0.42,
   },

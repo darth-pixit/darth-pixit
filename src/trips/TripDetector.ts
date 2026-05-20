@@ -55,8 +55,13 @@ export class TripDetector {
 
   feed(data: OBDData): void {
     if (data.state !== 'ready') {
-      if (this.active) this.finish();
-      else this.phase = 'idle';
+      // Transient states (scanning, connecting, reconnecting) are BLE hiccups —
+      // don't throw away a live trip over a momentary adapter blip.
+      // Only terminate on idle (user stopped) or error (unrecoverable).
+      if (data.state === 'idle' || data.state === 'error') {
+        if (this.active) this.finish();
+        else this.phase = 'idle';
+      }
       return;
     }
 
@@ -128,6 +133,14 @@ export class TripDetector {
     }
 
     const total = ecoTicks + modTicks + pushTicks;
+    // Round each bucket independently, then fix the remainder on the largest bucket
+    // so the three values always sum to exactly 100%.
+    let ecoPct = 0, modPct = 0, pushPct = 0;
+    if (total) {
+      ecoPct  = Math.round((ecoTicks  / total) * 100);
+      modPct  = Math.round((modTicks  / total) * 100);
+      pushPct = 100 - ecoPct - modPct;
+    }
     return {
       id: String(this.tripStart),
       startTime: this.tripStart,
@@ -137,9 +150,9 @@ export class TripDetector {
       avgSpeedKmH: Math.round(totalSpeed / s.length),
       distanceKm: Math.round(distKm * 10) / 10,
       totalFuelL: Math.round(fuelL * 100) / 100,
-      ecoTimePct: total ? Math.round((ecoTicks / total) * 100) : 0,
-      modTimePct: total ? Math.round((modTicks / total) * 100) : 0,
-      pushTimePct: total ? Math.round((pushTicks / total) * 100) : 0,
+      ecoTimePct: ecoPct,
+      modTimePct: modPct,
+      pushTimePct: pushPct,
     };
   }
 }
