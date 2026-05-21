@@ -225,8 +225,12 @@ export class OBDManager {
     console.log('[OBD]', line);
     this.logBuf.push(line);
     if (this.logBuf.length > 80) this.logBuf.splice(0, this.logBuf.length - 80);
+    // Do NOT call onUpdate here. The updated logBuf is included automatically in
+    // the next emit() or emitCurrent() call. Calling onUpdate on every log line
+    // was triggering TripDetector.feed() and Zustand set() ~48 times/second during
+    // active polling, causing the samples array to grow to hundreds of thousands of
+    // entries on long drives.
     this.data = { ...this.data, debugLog: [...this.logBuf] };
-    this.onUpdate?.(this.data);
   }
 
   setUpdateHandler(fn: (data: OBDData) => void) {
@@ -639,6 +643,9 @@ export class OBDManager {
     });
     const t = setTimeout(() => {
       this.responseResolve = null;
+      // Clear the buffer so a belated multi-packet response to THIS timed-out
+      // command cannot be mistakenly resolved against the NEXT command's resolver.
+      this.rxBuffer = '';
       this.log(`timeout (${timeoutMs}ms) waiting for: ${cmd}`);
       outerReject(new Error('timeout'));
     }, timeoutMs);

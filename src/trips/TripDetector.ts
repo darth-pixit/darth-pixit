@@ -22,14 +22,24 @@ const MOTION_HOLD_MS = 8_000; // 8 s
 const STOP_SPEED = 2;          // km/h
 const STOP_HOLD_MS = 90_000;   // 90 s
 
-interface Sample {
-  ts: number;
-  speed: number;
-  fuelRateLPerH: number | null;
-  engineLoadPct: number | null;
+type Phase = 'idle' | 'arming' | 'running' | 'draining';
+
+interface Acc {
+  maxSpeed: number;
+  totalSpeed: number;
+  distKm: number;
+  fuelL: number;
+  ecoTicks: number;
+  modTicks: number;
+  pushTicks: number;
+  sampleCount: number;
+  lastTs: number;
+  endTs: number;
 }
 
-type Phase = 'idle' | 'arming' | 'running' | 'draining';
+function freshAcc(now: number): Acc {
+  return { maxSpeed: 0, totalSpeed: 0, distKm: 0, fuelL: 0, ecoTicks: 0, modTicks: 0, pushTicks: 0, sampleCount: 0, lastTs: now, endTs: now };
+}
 
 export class TripDetector {
   private static _inst: TripDetector;
@@ -41,7 +51,7 @@ export class TripDetector {
   private phase: Phase = 'idle';
   private phaseAt = 0;
   private tripStart = 0;
-  private samples: Sample[] = [];
+  private acc: Acc = freshAcc(0);
   private onEnded: ((t: Trip) => void) | null = null;
   private onActive: ((active: boolean, start: number) => void) | null = null;
 
@@ -73,19 +83,19 @@ export class TripDetector {
           this.phase = 'idle';
         } else if (now - this.phaseAt >= MOTION_HOLD_MS) {
           this.tripStart = this.phaseAt;
-          this.samples = [];
+          this.acc = freshAcc(now);
           this.phase = 'running';
           this.onActive?.(true, this.tripStart);
         }
         break;
 
       case 'running':
-        this.samples.push({ ts: now, speed: spd, fuelRateLPerH: data.fuelRateLPerH, engineLoadPct: data.engineLoadPct });
+        this.updateAcc(spd, data.fuelRateLPerH, data.engineLoadPct, now);
         if (spd <= STOP_SPEED) { this.phase = 'draining'; this.phaseAt = now; }
         break;
 
       case 'draining':
-        this.samples.push({ ts: now, speed: spd, fuelRateLPerH: data.fuelRateLPerH, engineLoadPct: data.engineLoadPct });
+        this.updateAcc(spd, data.fuelRateLPerH, data.engineLoadPct, now);
         if (spd > STOP_SPEED) {
           this.phase = 'running';
         } else if (now - this.phaseAt >= STOP_HOLD_MS) {
@@ -95,51 +105,50 @@ export class TripDetector {
     }
   }
 
+  private updateAcc(speed: number, fuelRateLPerH: number | null, engineLoadPct: number | null, now: number): void {
+    const a = this.acc;
+    const dtSec = a.sampleCount === 0 ? 0 : (now - a.lastTs) / 1000;
+
+    a.maxSpeed = Math.max(a.maxSpeed, speed);
+    a.totalSpeed += speed;
+    a.distKm += speed * (dtSec / 3600);
+    if (fuelRateLPerH !== null) a.fuelL += fuelRateLPerH * (dtSec / 3600);
+
+    const load = (engineLoadPct ?? 0) / 100;
+    if (load <= 0.40) a.ecoTicks++;
+    else if (load <= 0.70) a.modTicks++;
+    else a.pushTicks++;
+
+    a.sampleCount++;
+    a.lastTs = now;
+    a.endTs = now;
+  }
+
   private finish(): void {
     const trip = this.build();
     this.phase = 'idle';
-    this.samples = [];
+    this.acc = freshAcc(0);
     this.onActive?.(false, 0);
     if (trip) this.onEnded?.(trip);
   }
 
   private build(): Trip | null {
-    const s = this.samples;
-    if (s.length < 5) return null;
+    const a = this.acc;
+    if (a.sampleCount < 5) return null;
 
-    const endTime = s[s.length - 1].ts;
-    let maxSpeed = 0, totalSpeed = 0, distKm = 0, fuelL = 0;
-    let ecoTicks = 0, modTicks = 0, pushTicks = 0;
-
-    for (let i = 0; i < s.length; i++) {
-      const dtSec = i === 0 ? 0 : (s[i].ts - s[i - 1].ts) / 1000;
-      const { speed, fuelRateLPerH, engineLoadPct } = s[i];
-
-      maxSpeed = Math.max(maxSpeed, speed);
-      totalSpeed += speed;
-      distKm += speed * (dtSec / 3600);
-
-      if (fuelRateLPerH !== null) fuelL += fuelRateLPerH * (dtSec / 3600);
-
-      const load = (engineLoadPct ?? 0) / 100;
-      if (load <= 0.40) ecoTicks++;
-      else if (load <= 0.70) modTicks++;
-      else pushTicks++;
-    }
-
-    const total = ecoTicks + modTicks + pushTicks;
+    const total = a.ecoTicks + a.modTicks + a.pushTicks;
     return {
       id: String(this.tripStart),
       startTime: this.tripStart,
-      endTime,
-      durationSec: (endTime - this.tripStart) / 1000,
-      maxSpeedKmH: Math.round(maxSpeed),
-      avgSpeedKmH: Math.round(totalSpeed / s.length),
-      distanceKm: Math.round(distKm * 10) / 10,
-      totalFuelL: Math.round(fuelL * 100) / 100,
-      ecoTimePct: total ? Math.round((ecoTicks / total) * 100) : 0,
-      modTimePct: total ? Math.round((modTicks / total) * 100) : 0,
-      pushTimePct: total ? Math.round((pushTicks / total) * 100) : 0,
+      endTime: a.endTs,
+      durationSec: (a.endTs - this.tripStart) / 1000,
+      maxSpeedKmH: Math.round(a.maxSpeed),
+      avgSpeedKmH: Math.round(a.totalSpeed / a.sampleCount),
+      distanceKm: Math.round(a.distKm * 10) / 10,
+      totalFuelL: Math.round(a.fuelL * 100) / 100,
+      ecoTimePct: total ? Math.round((a.ecoTicks / total) * 100) : 0,
+      modTimePct: total ? Math.round((a.modTicks / total) * 100) : 0,
+      pushTimePct: total ? Math.round((a.pushTicks / total) * 100) : 0,
     };
   }
 }

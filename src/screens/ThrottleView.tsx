@@ -416,9 +416,14 @@ export function ThrottleView() {
   // Reversed orientation: throttle=0 → thumb at right (eco); throttle=1 → thumb at left (push).
   const fillWidth = anim.interpolate({ inputRange: [0, 1], outputRange: [0, TRACK_W], extrapolate: 'clamp' });
   const thumbLeft = anim.interpolate({ inputRange: [0, 1], outputRange: [TRACK_W - THUMB_W, 0], extrapolate: 'clamp' });
+  // Stay green through the full eco zone (0–ECO_LIMIT), then transition to amber
+  // through the mod zone, then to red through push. The previous mapping was
+  // ['#22C55E', '#F59E0B', '#EF4444', '#EF4444'] which turned the fill amber
+  // at ECO_LIMIT itself — meaning the fill was already half-amber at 20% throttle
+  // while the coaching still said "Eco Zone."
   const fillColor = anim.interpolate({
     inputRange: [0, ECO_LIMIT, MOD_LIMIT, 1],
-    outputRange: ['#22C55E', '#F59E0B', '#EF4444', '#EF4444'],
+    outputRange: ['#22C55E', '#22C55E', '#F59E0B', '#EF4444'],
     extrapolate: 'clamp',
   });
   const badgeLeft = anim.interpolate({
