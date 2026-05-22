@@ -47,7 +47,7 @@ export function OBDStatusBanner() {
         )}
       </View>
 
-      <Modal visible={showLog} animationType="slide" onRequestClose={() => setShowLog(false)}>
+      <Modal visible={showLog} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => setShowLog(false)}>
         <View style={styles.modal}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>OBD Debug Log</Text>

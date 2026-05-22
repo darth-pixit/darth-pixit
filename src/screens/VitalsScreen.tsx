@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   View,
   Text,
@@ -336,12 +336,12 @@ function buildSections(d: OBDData): VitalSection[] {
           label: 'Distance With MIL On',
           value: fmt(d.distanceMilOnKm, 0),
           unit: 'km',
-          severity: (d.distanceMilOnKm ?? 0) > 0 ? 'warn' : 'good',
+          severity: d.distanceMilOnKm == null ? 'neutral' : d.distanceMilOnKm > 0 ? 'warn' : 'good',
         },
         {
           label: 'Time With MIL On',
           value: fmtMinutes(d.timeMilOnMin),
-          severity: (d.timeMilOnMin ?? 0) > 0 ? 'warn' : 'good',
+          severity: d.timeMilOnMin == null ? 'neutral' : d.timeMilOnMin > 0 ? 'warn' : 'good',
         },
       ],
     },
@@ -350,7 +350,20 @@ function buildSections(d: OBDData): VitalSection[] {
 
 export function VitalsScreen({ visible, onClose }: VitalsScreenProps) {
   const data = useOBDStore();
-  const sections = buildSections(data);
+  // Skip the 30-field rebuild while the modal is hidden — OBD updates at ~4 Hz.
+  const sections = useMemo(
+    () => (visible ? buildSections(data) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [visible, data.rpm, data.speedKmH, data.engineLoadPct, data.coolantC,
+     data.milOn, data.dtcCount, data.fuelLevelPct, data.oilTempC,
+     data.batteryVolts, data.throttlePosPct, data.fuelPressureKPa,
+     data.ambientTempC, data.absoluteLoadPct, data.shortFuelTrim1Pct,
+     data.longFuelTrim1Pct, data.timingAdvanceDeg, data.baroPressureKPa,
+     data.engineRunTimeSec, data.distanceMilOnKm, data.distanceSinceClearedKm,
+     data.timeMilOnMin, data.timeSinceClearedMin, data.mafGPerS, data.mapKPa,
+     data.iatC, data.fuelRateLPerH, data.fuelCalcMethod,
+     data.seatbeltStatus, data.tpmsFLKpa, data.tpmsFRKpa, data.tpmsRLKpa, data.tpmsRRKpa],
+  );
   const isLive = data.state === 'ready';
 
   return (

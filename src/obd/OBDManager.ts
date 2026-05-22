@@ -200,6 +200,7 @@ export class OBDManager {
     if (!this.ble) this.ble = new BleManager();
     return this.ble;
   }
+  private connGen = 0; // incremented on every onConnected() call; prevents stale calls from starting a second poll loop
   private device: Device | null = null;
   private serviceUuid: string | null = null;
   private writeCharId: string | null = null;
@@ -403,6 +404,7 @@ export class OBDManager {
   }
 
   private async onConnected() {
+    const gen = ++this.connGen;
     if (!this.device) return;
     this.log('connected; discovering services');
     await this.device.discoverAllServicesAndCharacteristics();
@@ -423,6 +425,11 @@ export class OBDManager {
       }
       return;
     }
+
+    // A reconnect may have fired while we were discovering services (e.g. the adapter
+    // dropped and the 1 s backoff fired before pickCharacteristics returned). Bail
+    // so the newer onConnected() owns the shared serviceUuid/writeCharId/notifySubscription.
+    if (this.connGen !== gen) return;
 
     this.serviceUuid = picked.serviceUuid;
     this.writeCharId = picked.writeUuid;
@@ -498,8 +505,9 @@ export class OBDManager {
     await this.probeExtendedPIDs();
 
     // stop() may have been called while probeExtendedPIDs() was timing out.
-    // If so, bail — don't override the idle state or start a ghost poll loop.
-    if (!this.device) return;
+    // A reconnect may also have fired (connGen incremented), meaning a newer
+    // onConnected() already owns the state. In either case, bail silently.
+    if (!this.device || this.connGen !== gen) return;
 
     this.reconnectAttempt = 0;
     this.polling = true;

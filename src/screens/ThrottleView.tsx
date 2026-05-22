@@ -284,7 +284,7 @@ export function ThrottleView() {
   const [binAvgs, setBinAvgs] = useState<(number | null)[]>(Array(BIN_COUNT).fill(null));
 
   // Load persisted trips once on mount
-  useEffect(() => { loadTrips(); }, []);
+  useEffect(() => { loadTrips(); }, [loadTrips]);
 
   // Demo mode: animated sine-wave throttle simulation
   useEffect(() => {
