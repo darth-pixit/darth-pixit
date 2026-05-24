@@ -416,9 +416,23 @@ export function ThrottleView() {
   // Reversed orientation: throttle=0 → thumb at right (eco); throttle=1 → thumb at left (push).
   const fillWidth = anim.interpolate({ inputRange: [0, 1], outputRange: [0, TRACK_W], extrapolate: 'clamp' });
   const thumbLeft = anim.interpolate({ inputRange: [0, 1], outputRange: [TRACK_W - THUMB_W, 0], extrapolate: 'clamp' });
+  // Transition over a narrow 4% band at each zone boundary so the fill color
+  // stays solidly green in the eco zone, amber in moderate, red in push — rather
+  // than blending across the full width of each zone.
+  const COLOR_TRANSITION = 0.04;
   const fillColor = anim.interpolate({
-    inputRange: [0, ECO_LIMIT, MOD_LIMIT, 1],
-    outputRange: ['#22C55E', '#F59E0B', '#EF4444', '#EF4444'],
+    inputRange: [
+      0,
+      ECO_LIMIT - COLOR_TRANSITION, ECO_LIMIT,
+      MOD_LIMIT - COLOR_TRANSITION, MOD_LIMIT,
+      1,
+    ],
+    outputRange: [
+      '#22C55E',
+      '#22C55E', '#F59E0B',
+      '#F59E0B', '#EF4444',
+      '#EF4444',
+    ],
     extrapolate: 'clamp',
   });
   const badgeLeft = anim.interpolate({
@@ -570,7 +584,7 @@ export function ThrottleView() {
         </View>
 
         {/* Trip average mileage */}
-        {tripAvgKmL != null ? (
+        {tripAvgKmL != null && Number.isFinite(tripAvgKmL) ? (
           <View style={styles.tripRow}>
             <Text style={styles.tripLabel}>TRIP AVG</Text>
             <Text style={styles.tripVal}>{tripAvgKmL.toFixed(1)}</Text>
