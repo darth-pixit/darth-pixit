@@ -22,6 +22,12 @@ const MOTION_HOLD_MS = 8_000; // 8 s
 const STOP_SPEED = 2;          // km/h
 const STOP_HOLD_MS = 90_000;   // 90 s
 
+// OBDManager emits updates on every log line (not just PID data changes), so
+// feed() is called ~12 times per 250ms poll cycle. Without this guard the
+// samples array grows ~12× faster than intended, reaching 100k+ entries on a
+// 2-hour trip. One sample per second is more than enough for trip-level accuracy.
+const SAMPLE_INTERVAL_MS = 1_000;
+
 interface Sample {
   ts: number;
   speed: number;
@@ -42,6 +48,7 @@ export class TripDetector {
   private phaseAt = 0;
   private tripStart = 0;
   private samples: Sample[] = [];
+  private lastSampleTs = 0;
   private onEnded: ((t: Trip) => void) | null = null;
   private onActive: ((active: boolean, start: number) => void) | null = null;
 
@@ -74,18 +81,25 @@ export class TripDetector {
         } else if (now - this.phaseAt >= MOTION_HOLD_MS) {
           this.tripStart = this.phaseAt;
           this.samples = [];
+          this.lastSampleTs = 0;
           this.phase = 'running';
           this.onActive?.(true, this.tripStart);
         }
         break;
 
       case 'running':
-        this.samples.push({ ts: now, speed: spd, fuelRateLPerH: data.fuelRateLPerH, engineLoadPct: data.engineLoadPct });
+        if (now - this.lastSampleTs >= SAMPLE_INTERVAL_MS) {
+          this.samples.push({ ts: now, speed: spd, fuelRateLPerH: data.fuelRateLPerH, engineLoadPct: data.engineLoadPct });
+          this.lastSampleTs = now;
+        }
         if (spd <= STOP_SPEED) { this.phase = 'draining'; this.phaseAt = now; }
         break;
 
       case 'draining':
-        this.samples.push({ ts: now, speed: spd, fuelRateLPerH: data.fuelRateLPerH, engineLoadPct: data.engineLoadPct });
+        if (now - this.lastSampleTs >= SAMPLE_INTERVAL_MS) {
+          this.samples.push({ ts: now, speed: spd, fuelRateLPerH: data.fuelRateLPerH, engineLoadPct: data.engineLoadPct });
+          this.lastSampleTs = now;
+        }
         if (spd > STOP_SPEED) {
           this.phase = 'running';
         } else if (now - this.phaseAt >= STOP_HOLD_MS) {
@@ -128,6 +142,10 @@ export class TripDetector {
     }
 
     const total = ecoTicks + modTicks + pushTicks;
+    // Compute two percentages and derive the third to guarantee they sum to 100.
+    const ecoPct  = total ? Math.round((ecoTicks  / total) * 100) : 0;
+    const modPct  = total ? Math.round((modTicks  / total) * 100) : 0;
+    const pushPct = total ? 100 - ecoPct - modPct : 0;
     return {
       id: String(this.tripStart),
       startTime: this.tripStart,
@@ -137,9 +155,9 @@ export class TripDetector {
       avgSpeedKmH: Math.round(totalSpeed / s.length),
       distanceKm: Math.round(distKm * 10) / 10,
       totalFuelL: Math.round(fuelL * 100) / 100,
-      ecoTimePct: total ? Math.round((ecoTicks / total) * 100) : 0,
-      modTimePct: total ? Math.round((modTicks / total) * 100) : 0,
-      pushTimePct: total ? Math.round((pushTicks / total) * 100) : 0,
+      ecoTimePct: ecoPct,
+      modTimePct: modPct,
+      pushTimePct: pushPct,
     };
   }
 }
