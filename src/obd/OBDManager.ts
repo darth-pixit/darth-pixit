@@ -200,6 +200,10 @@ export class OBDManager {
     if (!this.ble) this.ble = new BleManager();
     return this.ble;
   }
+  // Monotonically incremented on every connect() call. onConnected() checks
+  // this after each async gap so a stale continuation from a previous
+  // connection attempt can bail before starting a duplicate poll loop.
+  private connectionGen = 0;
   private device: Device | null = null;
   private serviceUuid: string | null = null;
   private writeCharId: string | null = null;
@@ -225,8 +229,10 @@ export class OBDManager {
     console.log('[OBD]', line);
     this.logBuf.push(line);
     if (this.logBuf.length > 80) this.logBuf.splice(0, this.logBuf.length - 80);
-    this.data = { ...this.data, debugLog: [...this.logBuf] };
-    this.onUpdate?.(this.data);
+    // Do NOT call onUpdate here — log entries are batched into the next
+    // emitCurrent/emit call (each of which already includes the latest logBuf).
+    // Calling onUpdate on every log line causes ~12 extra Zustand store pushes
+    // per polling iteration (~8+/sec) with no new OBD data to show.
   }
 
   setUpdateHandler(fn: (data: OBDData) => void) {
@@ -266,7 +272,11 @@ export class OBDManager {
     this.device = null;
     this.serviceUuid = null;
     this.writeCharId = null;
-    this.emit({ ...defaultOBDData, state: 'idle', debugLog: [...this.logBuf] });
+    // Guard: if start() was called while cancelConnection() was in-flight,
+    // active is true again and we must not clobber the new connection state.
+    if (!this.active) {
+      this.emit({ ...defaultOBDData, state: 'idle', debugLog: [...this.logBuf] });
+    }
   }
 
   private async waitForPoweredOn(timeoutMs = 8000): Promise<boolean> {
@@ -318,6 +328,8 @@ export class OBDManager {
   }
 
   private async connect() {
+    const gen = ++this.connectionGen;
+
     if (!(await this.waitForPoweredOn())) return;
 
     if (this.cachedDeviceId) {
@@ -325,7 +337,7 @@ export class OBDManager {
         this.emit({ state: 'connecting' });
         this.log(`reconnecting to cached ${this.cachedDeviceId}`);
         this.device = await this.getBle().connectToDevice(this.cachedDeviceId, { timeout: 8000 });
-        await this.onConnected();
+        await this.onConnected(gen);
         return;
       } catch (e: any) {
         this.log(`cached reconnect failed: ${e?.message ?? e}`);
@@ -351,7 +363,7 @@ export class OBDManager {
     try {
       this.device = await found.connect({ timeout: 8000 });
       this.cachedDeviceId = this.device.id;
-      await this.onConnected();
+      await this.onConnected(gen);
     } catch (e: any) {
       this.log(`connect/onConnected failed: ${e?.message ?? e}`);
       this.scheduleReconnect();
@@ -402,7 +414,7 @@ export class OBDManager {
     });
   }
 
-  private async onConnected() {
+  private async onConnected(gen: number) {
     if (!this.device) return;
     this.log('connected; discovering services');
     await this.device.discoverAllServicesAndCharacteristics();
@@ -478,6 +490,9 @@ export class OBDManager {
     // Probe ECU. The first PID request triggers ELM327 auto-protocol search,
     // which can take 5–15s even with the ignition on. Retry once before giving up.
     const probeOk = await this.probeEcu();
+    // A disconnect during ECU probing increments connectionGen via scheduleReconnect
+    // → connect(). Bail before touching polling state so the reconnect runs clean.
+    if (!this.active || gen !== this.connectionGen) return;
     if (!probeOk) {
       this.notifySubscription?.remove();
       this.notifySubscription = null;
@@ -485,7 +500,7 @@ export class OBDManager {
       // (e.g. the adapter dropped mid-probe and onDisconnected already called
       // scheduleReconnect). In that case we stay in 'reconnecting' and let the
       // timer retry rather than overwriting it with a misleading error message.
-      if (this.active && this.reconnectTimer === null) {
+      if (this.reconnectTimer === null) {
         this.emit({ state: 'error', errorMsg: 'ECU not responding. Turn ignition ON.' });
       }
       return;
@@ -497,9 +512,10 @@ export class OBDManager {
     // delay is bounded (~10 s worst-case on a vehicle with all PIDs unsupported).
     await this.probeExtendedPIDs();
 
-    // stop() may have been called while probeExtendedPIDs() was timing out.
-    // If so, bail — don't override the idle state or start a ghost poll loop.
-    if (!this.device) return;
+    // If stop() was called, OR if a disconnect mid-probe caused scheduleReconnect()
+    // to already kick off a newer connect() (gen mismatch), bail here so we don't
+    // start a ghost poll loop on top of the reconnect in progress.
+    if (!this.active || gen !== this.connectionGen) return;
 
     this.reconnectAttempt = 0;
     this.polling = true;
@@ -857,8 +873,9 @@ export class OBDManager {
 
   private emitCurrent() {
     // Spread to a new object so Zustand's Object.is guard always sees a fresh
-    // reference and triggers re-renders, regardless of whether log() ran first.
-    this.data = { ...this.data };
+    // reference. Also bake in the latest logBuf so the debug modal stays current
+    // without log() needing to push a Zustand update on every log line.
+    this.data = { ...this.data, debugLog: [...this.logBuf] };
     this.onUpdate?.(this.data);
   }
 }
