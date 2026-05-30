@@ -84,7 +84,7 @@ export function OTPScreen({ confirmation, phone, onBack }: Props) {
       await confirmOTP(activeConfirmation.current, code);
       // onAuthStateChanged in AuthContext will update user → RootNavigator switches screens
     } catch (e: any) {
-      Alert.alert('Invalid code', e?.message ?? 'The code you entered is incorrect. Please try again.');
+      Alert.alert('Invalid code', authErrorToMessage(e, 'The code you entered is incorrect. Please try again.'));
       setDigits(Array(CODE_LENGTH).fill(''));
       setTimeout(() => inputRefs.current[0]?.focus(), 50);
     } finally {

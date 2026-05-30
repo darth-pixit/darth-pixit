@@ -837,6 +837,12 @@ export class OBDManager {
   private scheduleReconnect() {
     if (!this.active) return;
     this.polling = false;
+    // Null the device reference so any in-flight onConnected() (e.g. still
+    // draining probeExtendedPIDs timeouts) hits the `if (!this.device) return`
+    // guard and stops rather than starting a second poll loop.
+    this.device = null;
+    this.writeCharId = null;
+    this.serviceUuid = null;
     this.reconnectAttempt++;
     if (this.reconnectAttempt > 8) {
       this.emit({ state: 'error', errorMsg: 'Lost connection. Check the adapter.' });

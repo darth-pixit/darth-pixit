@@ -72,7 +72,9 @@ export class TripDetector {
         if (spd < MOTION_SPEED) {
           this.phase = 'idle';
         } else if (now - this.phaseAt >= MOTION_HOLD_MS) {
-          this.tripStart = this.phaseAt;
+          // Use `now` (debounce confirmation time), not `phaseAt` (arming start),
+          // so the elapsed timer and durationSec exclude the 8s debounce window.
+          this.tripStart = now;
           this.samples = [];
           this.phase = 'running';
           this.onActive?.(true, this.tripStart);
@@ -128,6 +130,11 @@ export class TripDetector {
     }
 
     const total = ecoTicks + modTicks + pushTicks;
+    // Round eco and mod independently; derive push as the remainder so the three
+    // values always sum to exactly 100 (avoiding flex-bar gaps from independent rounding).
+    const ecoPct  = total ? Math.round((ecoTicks  / total) * 100) : 0;
+    const modPct  = total ? Math.round((modTicks  / total) * 100) : 0;
+    const pushPct = total ? 100 - ecoPct - modPct : 0;
     return {
       id: String(this.tripStart),
       startTime: this.tripStart,
@@ -137,9 +144,9 @@ export class TripDetector {
       avgSpeedKmH: Math.round(totalSpeed / s.length),
       distanceKm: Math.round(distKm * 10) / 10,
       totalFuelL: Math.round(fuelL * 100) / 100,
-      ecoTimePct: total ? Math.round((ecoTicks / total) * 100) : 0,
-      modTimePct: total ? Math.round((modTicks / total) * 100) : 0,
-      pushTimePct: total ? Math.round((pushTicks / total) * 100) : 0,
+      ecoTimePct: ecoPct,
+      modTimePct: modPct,
+      pushTimePct: pushPct,
     };
   }
 }
