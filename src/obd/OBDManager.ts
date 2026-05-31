@@ -347,6 +347,9 @@ export class OBDManager {
       return;
     }
 
+    // Guard: stop() may have been called while the 15-second scan was running.
+    if (!this.active) return;
+
     this.emit({ state: 'connecting', adapterName: found.name ?? 'OBD Adapter' });
     try {
       this.device = await found.connect({ timeout: 8000 });
@@ -498,8 +501,10 @@ export class OBDManager {
     await this.probeExtendedPIDs();
 
     // stop() may have been called while probeExtendedPIDs() was timing out.
-    // If so, bail — don't override the idle state or start a ghost poll loop.
-    if (!this.device) return;
+    // Check active first: stop() sets active=false synchronously, but device
+    // is only nulled after cancelConnection() resolves, so !device alone misses
+    // the window between those two ticks and lets a ghost poll loop start.
+    if (!this.active || !this.device) return;
 
     this.reconnectAttempt = 0;
     this.polling = true;
@@ -837,6 +842,13 @@ export class OBDManager {
   private scheduleReconnect() {
     if (!this.active) return;
     this.polling = false;
+    // Clear any pending timer before counting another attempt — without this,
+    // a disconnect during the probe phase triggers both onDisconnected AND the
+    // connect() catch block, scheduling two timers and double-counting attempts.
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.reconnectAttempt++;
     if (this.reconnectAttempt > 8) {
       this.emit({ state: 'error', errorMsg: 'Lost connection. Check the adapter.' });

@@ -20,8 +20,16 @@ export function RootNavigator() {
     if (!user) setAuthStep({ step: 'phone' });
   }, [user]);
 
-  // Render auth screens immediately when there's no confirmed user — no reason
-  // to block behind a Firebase spinner for a user who needs to log in anyway.
+  // While Firebase is restoring a cached session, show a spinner rather than
+  // flashing the auth screens for a user who is already signed in.
+  if (initializing && !user) {
+    return (
+      <View style={styles.splash}>
+        <ActivityIndicator size="large" color="#22C55E" />
+      </View>
+    );
+  }
+
   if (!user) {
     if (authStep.step === 'otp') {
       return (
