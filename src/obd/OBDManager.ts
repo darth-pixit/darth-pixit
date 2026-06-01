@@ -856,6 +856,9 @@ export class OBDManager {
   }
 
   private emitCurrent() {
+    // Guard: stop() sets active=false and emits idle. Don't overwrite that
+    // with stale PID data if a BLE response sneaks in after stop().
+    if (!this.active) return;
     // Spread to a new object so Zustand's Object.is guard always sees a fresh
     // reference and triggers re-renders, regardless of whether log() ran first.
     this.data = { ...this.data };
@@ -900,11 +903,9 @@ function parseHexResponse(raw: string, headerLen = 2): number[] | null {
     if (m) parts = m;
   }
   if (parts.length <= headerLen) return null;
-  try {
-    return parts.slice(headerLen).map((h) => parseInt(h, 16));
-  } catch {
-    return null;
-  }
+  const bytes = parts.slice(headerLen).map((h) => parseInt(h, 16));
+  if (bytes.some(isNaN)) return null;
+  return bytes;
 }
 
 function sleep(ms: number) {

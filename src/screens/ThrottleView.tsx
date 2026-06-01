@@ -315,9 +315,15 @@ export function ThrottleView() {
     return null;
   }, [hasLiveData, isDemoMode, demoThrottle, fuelRateLPerH, speedKmH]);
 
-  // Reset accumulators when session ends or demo mode toggles.
+  // Reset accumulators when the OBD session truly ends (idle or error) or when
+  // demo mode toggles. Transient states (reconnecting, scanning, connecting) are
+  // NOT terminal — the 90s TripDetector drain keeps the trip alive through brief
+  // signal drops, so we must not wipe the running averages here.
   useEffect(() => {
-    if (!hasLiveData) {
+    const shouldReset = isDemoMode
+      ? false  // demo toggle handled by the effect below
+      : state === 'idle' || state === 'error';
+    if (shouldReset) {
       tripFuelRef.current = 0;
       tripDistRef.current = 0;
       binFuelRef.current = Array(BIN_COUNT).fill(0);
@@ -325,7 +331,7 @@ export function ThrottleView() {
       setTripAvgKmL(null);
       setBinAvgs(Array(BIN_COUNT).fill(null));
     }
-  }, [hasLiveData]);
+  }, [isDemoMode, state]);
 
   useEffect(() => {
     tripFuelRef.current = 0;
@@ -732,7 +738,7 @@ const styles = StyleSheet.create({
   fill: {
     position: 'absolute',
     top: 0,
-    right: 0,
+    left: 0,
     height: TRACK_H,
     opacity: 0.42,
   },
